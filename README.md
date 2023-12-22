@@ -5,7 +5,7 @@ This Python project focuses on generating training data for detecting columns or
 
 ![Validation results](res/results_val_1.png)
 
-![Validation results](res/results_val_1.png)
+![Validation results](res/results_val_2.png)
 
 It includes functions to create lorem ipsum-like Tibetan text, read random Tibetan text files from a directory, and calculate and embed text within specified bounding boxes in images. The project effectively handles Tibetan script, ensuring proper display and formatting within the images.
 
