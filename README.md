@@ -1,7 +1,13 @@
 # Tibetan Column Detection
 
 ## Overview
-This Python project focuses on generating training data for detecting columns or text blocks of tibetan texts by embedding Tibetan text into images. It includes functions to create lorem ipsum-like Tibetan text, read random Tibetan text files from a directory, and calculate and embed text within specified bounding boxes in images. The project effectively handles Tibetan script, ensuring proper display and formatting within the images.
+This Python project focuses on generating training data for detecting columns or text blocks of tibetan texts by embedding Tibetan text into images. 
+
+![Validation results](res/results_val_1.png)
+
+![Validation results](res/results_val_1.png)
+
+It includes functions to create lorem ipsum-like Tibetan text, read random Tibetan text files from a directory, and calculate and embed text within specified bounding boxes in images. The project effectively handles Tibetan script, ensuring proper display and formatting within the images.
 
 ## Features
 - **Tibetan Text Generation**: Generate lorem ipsum-like Tibetan text.
