@@ -18,7 +18,7 @@ def ensure_directory_exists(file_path):
         os.makedirs(directory, exist_ok=True)
 
 
-def calculate_wrapped_text_bounding_box(text, box_size, font_path='Microsoft Himalaya.ttf', font_size=24):
+def calculate_wrapped_text_bounding_box(text, box_size, font_path='res/Microsoft Himalaya.ttf', font_size=24):
     """
     Calculate the true bounding box size for the specified text when it is wrapped and terminated to fit a given box size.
 
@@ -48,14 +48,17 @@ def calculate_wrapped_text_bounding_box(text, box_size, font_path='Microsoft Him
         while line:
             # Find the breakpoint for wrapping
             for i in range(len(line)):
-                if draw.textsize(line[:i + 1], font=font)[0] > box_w:
+                if draw.textlength(line[:i + 1], font=font) > box_w:
                     break
             else:
                 i = len(line)
 
             # Add the line to wrapped text
             wrapped_line = line[:i]
-            line_width, line_height = draw.textsize(wrapped_line, font=font)
+
+            left, top, right, bottom = font.getbbox(wrapped_line)
+            line_width, line_height = right - left, bottom - top
+
             actual_text_width = max(actual_text_width, line_width)
             y_offset += line_height
 
@@ -117,7 +120,7 @@ def generate_lorem_like_tibetan_text(length):
     return ' '.join(words)
 
 
-def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path='Microsoft Himalaya.ttf', font_size=24):
+def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path='res/Microsoft Himalaya.ttf', font_size=24):
     """
     Embed text within a specified rectangular box on an image, terminating the text if it surpasses the bounding box.
 
@@ -143,7 +146,7 @@ def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path=
     for line in text.split('\n'):
         while line:
             for i in range(len(line)):
-                if draw.textsize(line[:i + 1], font=font)[0] > box_w:
+                if draw.textlength(line[:i + 1], font=font) > box_w:
                     break
             else:
                 i = len(line)
@@ -153,10 +156,12 @@ def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path=
 
     y_offset = 0
     for line in wrapped_text:
-        if box_y + y_offset + font.getsize(line)[1] > max_y:
+        left, top, right, bottom = font.getbbox(line)
+        line_height = bottom - top
+        if box_y + y_offset + line_height > max_y:
             break  # Stop if the next line exceeds the box height
         draw.text((box_x, box_y + y_offset), line, font=font, fill=(0, 0, 0))
-        y_offset += font.getsize(line)[1]
+        y_offset += line_height
 
     return image
 
@@ -225,8 +230,8 @@ if __name__ == "__main__":
     folder_for_val_data = f'{folder_for_dataset}/val/'
     folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'
 
-    dataset_dict = generate_data(10, folder_with_background, folder_for_train_data, folder_with_corpoare)
-    generate_data(10, folder_with_background, folder_for_val_data, folder_with_corpoare)
+    dataset_dict = generate_data(1000, folder_with_background, folder_for_train_data, folder_with_corpoare)
+    generate_data(100, folder_with_background, folder_for_val_data, folder_with_corpoare)
 
     with open(f"{folder_for_dataset}/dataset.yml", 'w') as yaml_file:
         yaml.dump(dataset_dict, yaml_file, default_flow_style=False)
