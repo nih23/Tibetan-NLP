@@ -65,7 +65,3 @@ Contributions to this project are welcome! Please fork the repository and submit
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-Please replace `https://github.com/yourusername/tibetan-text-image-embedder.git` with the actual URL of your GitHub repository and adjust any specific details as per your project's structure and functionality.
