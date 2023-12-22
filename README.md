@@ -58,6 +58,18 @@ embedded_image = embed_text_in_box_with_limit(image, text_to_embed, box_position
 embedded_image.show()
 ```
 
+### Generating training data
+```bash
+python generate_training_data.py
+```
+
+### Train YOLOv8n
+```bash
+yolo detect train data=data/yolo_tibetan/tibetan_text_boxes.yml epochs=100 imgsz=1024
+```
+
+Training of YOLOv8n is done by a CLI call to [Ultralytics](https://docs.ultralytics.com/usage/cli/#train).
+
 ## Contributions
 
 Contributions to this project are welcome! Please fork the repository and submit a pull request with your proposed changes.

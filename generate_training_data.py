@@ -6,6 +6,7 @@ import os
 import random
 import yaml
 import numpy as np
+from tqdm import tqdm
 
 
 def ensure_directory_exists(file_path):
@@ -175,7 +176,7 @@ def generate_data(no_images = 10, folder_with_background = './data/background_im
     # Load background images
     images = [file for file in os.listdir(folder_with_background) if file.lower().endswith(('.jpg', '.png'))]
 
-    for ctr in range(no_images):
+    for ctr in tqdm(range(no_images)):
 
         image_id = random.randint(0, len(images)-1)
         image_path = folder_with_background + "/" + images[image_id]
@@ -183,24 +184,37 @@ def generate_data(no_images = 10, folder_with_background = './data/background_im
             magazine_image = Image.open(io.BytesIO(image_file.read()))
 
         dx, dy = magazine_image.size
-        #text_to_embed = generate_lorem_like_tibetan_text(500)
-        text_to_embed = read_random_tibetan_file(folder_with_corpoare)
-        max_box_size = (400, 400)    # maximum size of text box (text will be wrapped if longer)
+        no_cols = random.randint(1, 2)
+        dx_multicol = int(dx / no_cols)
 
-        box_pos_x = random.randint(0, dx - max_box_size[0])
+        max_box_size_w = random.randint(100, dx_multicol-5)
+        max_box_size = (max_box_size_w, 400)    # maximum size of text box (text will be wrapped if longer)
+        box_pos_x = random.randint(0, dx_multicol - max_box_size[0])
         box_pos_y = random.randint(0, dy - max_box_size[1])
-        box_position = (box_pos_x, box_pos_y)  # position of text box
 
+        bbox_str = ""
 
-        bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size)
-        img = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size)
-        bbox = np.array(bbox)
-        x = box_position[0]
-        y = box_position[1]
-        w = bbox[0]
-        h = bbox[1]
+        print(f"\n\n[{ctr}] image size: ({dx},{dy})")
 
-        bbox_str = prepare_bbox_string(label_id,x,y,h,w,dx,dy)
+        for i in range(no_cols):
+            #text_to_embed = generate_lorem_like_tibetan_text(500)
+            text_to_embed = read_random_tibetan_file(folder_with_corpoare)
+
+            # position of bounding box
+            box_pos_x += i*max_box_size_w + i*random.randint(5, 30)
+            box_position = (box_pos_x, box_pos_y)  # position of text box
+            print(f"position of box in col {i}: ({box_position[0]},{box_position[1]})")
+            print(f" >> max size ({max_box_size[0]},{max_box_size[1]})")
+
+            bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size)
+            magazine_image = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size)
+            bbox = np.array(bbox)
+            x = box_position[0]
+            y = box_position[1]
+            w = bbox[0]
+            h = bbox[1]
+
+            bbox_str += prepare_bbox_string(label_id,x,y,h,w,dx,dy) + "\n"
 
         pImg = folder_for_train_data + "/images/" + label + "_" + str(ctr) + ".png"
         pBB = folder_for_train_data + "/labels/" + label + "_" + str(ctr) + ".txt" 
@@ -209,7 +223,7 @@ def generate_data(no_images = 10, folder_with_background = './data/background_im
         ensure_directory_exists(pBB)
 
         # Save the image
-        img.save(pImg)
+        magazine_image.save(pImg)
 
         # Open the file in write mode
         with open(pBB, 'w') as file:
@@ -224,14 +238,16 @@ def generate_data(no_images = 10, folder_with_background = './data/background_im
 
 
 if __name__ == "__main__":
-    folder_with_background = './data/background_images/'
+    folder_with_background_train = './data/background_images_train/'
+    folder_with_background_val = './data/background_images_val/'
     folder_for_dataset = './data/yolo_tibetan'
     folder_for_train_data = f'{folder_for_dataset}/train/'
     folder_for_val_data = f'{folder_for_dataset}/val/'
     folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'
 
-    dataset_dict = generate_data(1000, folder_with_background, folder_for_train_data, folder_with_corpoare)
-    generate_data(100, folder_with_background, folder_for_val_data, folder_with_corpoare)
+    dataset_dict = generate_data(100, folder_with_background_train, folder_for_train_data, folder_with_corpoare)
+    generate_data(100, folder_with_background_val, folder_for_val_data, folder_with_corpoare)
+    dataset_dict['path'] = folder_for_dataset
 
-    with open(f"{folder_for_dataset}/dataset.yml", 'w') as yaml_file:
+    with open(f"{folder_for_dataset}/tibetan_text_boxes.yml", 'w') as yaml_file:
         yaml.dump(dataset_dict, yaml_file, default_flow_style=False)
