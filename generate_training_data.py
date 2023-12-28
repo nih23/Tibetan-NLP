@@ -7,7 +7,9 @@ import random
 import yaml
 import numpy as np
 from tqdm import tqdm
+from utils import hash_current_time
 
+import multiprocessing
 
 def ensure_directory_exists(file_path):
     # Extract the directory part of the file_path
@@ -166,7 +168,68 @@ def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path=
 
     return image
 
-def generate_data(no_images = 10, folder_with_background = './data/background_images/', folder_for_train_data = './data/train/', folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'):
+
+def generate_sample(images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False):
+    ctr = hash_current_time()
+
+    image_id = random.randint(0, len(images)-1)
+    image_path = folder_with_background + "/" + images[image_id]
+    with open(image_path, "rb") as image_file:
+        magazine_image = Image.open(io.BytesIO(image_file.read()))
+
+    dx, dy = magazine_image.size
+    no_cols = random.randint(1, 3)
+    dx_multicol = int(dx / no_cols)
+
+    max_box_size_w = random.randint(100, dx_multicol-5)
+    max_box_size = (max_box_size_w, 400)    # maximum size of text box (text will be wrapped if longer)
+    box_pos_x = random.randint(0, dx_multicol - max_box_size[0])
+    box_pos_y = random.randint(0, dy - max_box_size[1])
+
+    bbox_str = ""
+
+    if(debug):
+        print(f"\n\n[{ctr}] image size: ({dx},{dy})")
+
+    for i in range(no_cols):
+        #text_to_embed = generate_lorem_like_tibetan_text(500)
+        text_to_embed = read_random_tibetan_file(folder_with_corpoare)
+
+        # position of bounding box
+        if(i>0): # shift to the right for columns 2+
+            box_pos_x += max_box_size_w + i*random.randint(5, 30)
+        box_position = (box_pos_x, box_pos_y)  # position of text box
+        
+        if(debug):
+            print(f"position of box in col {i}: ({box_position[0]},{box_position[1]})")
+            print(f" >> max size ({max_box_size[0]},{max_box_size[1]})")
+
+        bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size)
+        magazine_image = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size)
+        bbox = np.array(bbox)
+        x = box_position[0]
+        y = box_position[1]
+        w = bbox[0]
+        h = bbox[1]
+
+        bbox_str += prepare_bbox_string(label_id,x,y,h,w,dx,dy) + "\n"
+
+    pImg = folder_for_train_data + "/images/" + label + "_" + str(ctr) + ".png"
+    pBB = folder_for_train_data + "/labels/" + label + "_" + str(ctr) + ".txt" 
+
+    ensure_directory_exists(pImg)
+    ensure_directory_exists(pBB)
+
+    # Save the image
+    magazine_image.save(pImg)
+
+    # Open the file in write mode
+    with open(pBB, 'w') as file:
+        # Write the string to the file
+        file.write(bbox_str)
+
+
+def generate_data(no_images = 5000, folder_with_background = './data/background_images/', folder_for_train_data = './data/train/', folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'):
 
     label = 'tibetan'
     label_id = 0
@@ -176,62 +239,18 @@ def generate_data(no_images = 10, folder_with_background = './data/background_im
     # Load background images
     images = [file for file in os.listdir(folder_with_background) if file.lower().endswith(('.jpg', '.png'))]
 
-    for ctr in tqdm(range(no_images)):
+    pool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
 
-        image_id = random.randint(0, len(images)-1)
-        image_path = folder_with_background + "/" + images[image_id]
-        with open(image_path, "rb") as image_file:
-            magazine_image = Image.open(io.BytesIO(image_file.read()))
+    args = (images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data)
 
-        dx, dy = magazine_image.size
-        no_cols = random.randint(1, 2)
-        dx_multicol = int(dx / no_cols)
+    number_of_calls = no_images
+    max_parallel_calls = os.cpu_count()
 
-        max_box_size_w = random.randint(100, dx_multicol-5)
-        max_box_size = (max_box_size_w, 400)    # maximum size of text box (text will be wrapped if longer)
-        box_pos_x = random.randint(0, dx_multicol - max_box_size[0])
-        box_pos_y = random.randint(0, dy - max_box_size[1])
+    # Create a pool of workers, limited to no. cpu parallel processes for generation of training data
+    with multiprocessing.Pool(max_parallel_calls) as pool:
+        results = pool.starmap(generate_sample, [args] * number_of_calls)
 
-        bbox_str = ""
-
-        print(f"\n\n[{ctr}] image size: ({dx},{dy})")
-
-        for i in range(no_cols):
-            #text_to_embed = generate_lorem_like_tibetan_text(500)
-            text_to_embed = read_random_tibetan_file(folder_with_corpoare)
-
-            # position of bounding box
-            box_pos_x += i*max_box_size_w + i*random.randint(5, 30)
-            box_position = (box_pos_x, box_pos_y)  # position of text box
-            print(f"position of box in col {i}: ({box_position[0]},{box_position[1]})")
-            print(f" >> max size ({max_box_size[0]},{max_box_size[1]})")
-
-            bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size)
-            magazine_image = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size)
-            bbox = np.array(bbox)
-            x = box_position[0]
-            y = box_position[1]
-            w = bbox[0]
-            h = bbox[1]
-
-            bbox_str += prepare_bbox_string(label_id,x,y,h,w,dx,dy) + "\n"
-
-        pImg = folder_for_train_data + "/images/" + label + "_" + str(ctr) + ".png"
-        pBB = folder_for_train_data + "/labels/" + label + "_" + str(ctr) + ".txt" 
-
-        ensure_directory_exists(pImg)
-        ensure_directory_exists(pBB)
-
-        # Save the image
-        magazine_image.save(pImg)
-
-        # Open the file in write mode
-        with open(pBB, 'w') as file:
-            # Write the string to the file
-            file.write(bbox_str)
-
-
-    label_dict_swap = {v: k for k, v in label_dict.items()} # swap key & value of dictionary for yolo file format
+    label_dict_swap = {v: k for k, v in label_dict.items()} # swap key & value of dictionary for ultralytics yolo file format
     dataset_dict = {'path': f"../{folder_for_train_data}", 'train': 'train/images', 'val': 'val/images', 'names': label_dict_swap }
 
     return dataset_dict
@@ -245,8 +264,8 @@ if __name__ == "__main__":
     folder_for_val_data = f'{folder_for_dataset}/val/'
     folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'
 
-    dataset_dict = generate_data(100, folder_with_background_train, folder_for_train_data, folder_with_corpoare)
-    generate_data(100, folder_with_background_val, folder_for_val_data, folder_with_corpoare)
+    dataset_dict = generate_data(5000, folder_with_background_train, folder_for_train_data, folder_with_corpoare)
+    generate_data(500, folder_with_background_val, folder_for_val_data, folder_with_corpoare)
     dataset_dict['path'] = folder_for_dataset
 
     with open(f"{folder_for_dataset}/tibetan_text_boxes.yml", 'w') as yaml_file:
