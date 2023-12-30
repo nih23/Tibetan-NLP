@@ -40,11 +40,25 @@ python generate_training_data.py
 ```
 
 ### Train YOLOv8n
+Training of YOLOv8n is done by a CLI call to [Ultralytics](https://docs.ultralytics.com/usage/cli/#train). 
+
 ```bash
-yolo detect train data=data/yolo_tibetan/tibetan_text_boxes.yml epochs=100 imgsz=1024
+yolo detect train data=data/yolo_tibetan/tibetan_text_boxes.yml epochs=1000 imgsz=1024
 ```
 
-Training of YOLOv8n is done by a CLI call to [Ultralytics](https://docs.ultralytics.com/usage/cli/#train).
+The model is then converted into a torchscript for inference:
+```bash
+yolo detect export model=runs/detect/train9/weights/best.pt 
+```
+
+### Inference
+We can now employ our trained model for recognition and classification of tibetan text blocks as follows:
+
+```bash
+yolo predict task=detect model=runs/detect/train9/weights/best.torchscript imgsz=1024 source=data/my_inference_data/*.jpg
+```
+
+The results are then saved to folder `runs/detect/predict`
 
 ## Contributions
 
