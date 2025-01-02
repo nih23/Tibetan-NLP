@@ -1,3 +1,6 @@
+import re
+from collections import OrderedDict
+
 from PIL import Image, ImageDraw, ImageFont
 from yolo_utils import prepare_bbox_string
 
@@ -8,7 +11,7 @@ import yaml
 import numpy as np
 from tqdm import tqdm
 from utils import hash_current_time
-
+import argparse
 import multiprocessing
 
 def ensure_directory_exists(file_path):
@@ -101,7 +104,7 @@ def read_random_tibetan_file(directory):
     except Exception as e:
         return f"Error reading file {random_file}: {e}"
 
-    return content
+    return content, random_file
 
 
 
@@ -123,7 +126,7 @@ def generate_lorem_like_tibetan_text(length):
     return ' '.join(words)
 
 
-def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path='res/Microsoft Himalaya.ttf', font_size=24):
+def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path, font_size=24):
     """
     Embed text within a specified rectangular box on an image, terminating the text if it surpasses the bounding box.
 
@@ -169,7 +172,7 @@ def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path=
     return image
 
 
-def generate_sample(images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False):
+def generate_sample(images, label_dict, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False, font_path ='res/Microsoft Himalaya.ttf', no_cols_max=3, single_label = False):
     ctr = hash_current_time()
 
     image_id = random.randint(0, len(images)-1)
@@ -178,7 +181,7 @@ def generate_sample(images, label, label_id, folder_with_background, folder_with
         magazine_image = Image.open(io.BytesIO(image_file.read()))
 
     dx, dy = magazine_image.size
-    no_cols = random.randint(1, 3)
+    no_cols = random.randint(1, no_cols_max)
     dx_multicol = int(dx / no_cols)
 
     max_box_size_w = random.randint(100, dx_multicol-5)
@@ -193,7 +196,14 @@ def generate_sample(images, label, label_id, folder_with_background, folder_with
 
     for i in range(no_cols):
         #text_to_embed = generate_lorem_like_tibetan_text(500)
-        text_to_embed = read_random_tibetan_file(folder_with_corpoare)
+        text_to_embed, filename = read_random_tibetan_file(folder_with_corpoare)
+
+
+        label = next(iter(label_dict.keys()))
+        label_id = label_dict[label]
+        if(not single_label):
+            label = os.path.splitext(filename)[0]
+            label_id = label_dict[label]
 
         # position of bounding box
         if(i>0): # shift to the right for columns 2+
@@ -204,8 +214,8 @@ def generate_sample(images, label, label_id, folder_with_background, folder_with
             print(f"position of box in col {i}: ({box_position[0]},{box_position[1]})")
             print(f" >> max size ({max_box_size[0]},{max_box_size[1]})")
 
-        bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size)
-        magazine_image = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size)
+        bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size, font_path)
+        magazine_image = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size, font_path)
         bbox = np.array(bbox)
         x = box_position[0]
         y = box_position[1]
@@ -229,21 +239,46 @@ def generate_sample(images, label, label_id, folder_with_background, folder_with
         file.write(bbox_str)
 
 
-def generate_data(no_images = 5000, folder_with_background = './data/background_images/', folder_for_train_data = './data/train/', folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'):
-
-    label = 'tibetan'
-    label_id = 0
+def fill_label_dict(folder_path):
     label_dict = {}
-    label_dict[label] = label_id
+    label_id = 0
+
+    # Get all txt files
+    files = [f for f in os.listdir(folder_path) if f.endswith(".txt")]
+
+    # Sort files based on the numeric part
+    sorted_files = sorted(files, key=lambda x: int(re.findall(r'\d+', x)[-1]))
+
+    for filename in sorted_files:
+        label = os.path.splitext(filename)[0]
+        if label not in label_dict:
+            label_dict[label] = label_id
+            label_id += 1
+
+    return label_dict
+
+
+def generate_data(args, validation = False):
+    folder_with_background = args.background_train
+    folder_for_train_data = f'{args.dataset_folder}/train/'
+    no_samples = args.train_samples
+    if(validation):
+        folder_with_background = args.background_val
+        folder_for_train_data = f'{args.dataset_folder}/val/'
+        no_samples = args.val_samples
+
+    label_dict = {'tibetan': 0}
+    if not args.single_label:
+        label_dict = fill_label_dict(args.corpora_folder)
 
     # Load background images
     images = [file for file in os.listdir(folder_with_background) if file.lower().endswith(('.jpg', '.png'))]
 
     pool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
 
-    args = (images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data)
+    args = (images, label_dict, folder_with_background, args.corpora_folder, folder_for_train_data, False, args.font_path, args.no_cols, args.single_label)
 
-    number_of_calls = no_images
+    number_of_calls = no_samples
     max_parallel_calls = os.cpu_count()
 
     # Create a pool of workers, limited to no. cpu parallel processes for generation of training data
@@ -251,22 +286,54 @@ def generate_data(no_images = 5000, folder_with_background = './data/background_
         results = pool.starmap(generate_sample, [args] * number_of_calls)
 
     label_dict_swap = {v: k for k, v in label_dict.items()} # swap key & value of dictionary for ultralytics yolo file format
-    dataset_dict = {'path': f"../{folder_for_train_data}", 'train': 'train/images', 'val': 'val/images', 'names': label_dict_swap }
 
+    dataset_dict = OrderedDict([
+        ('path', f"../{folder_for_train_data}"),
+        ('train', 'train/images'),
+        ('val', 'val/images'),
+        ('nc', len(label_dict_swap)),  # Add the number of classes
+        ('names', label_dict_swap)
+    ])
     return dataset_dict
 
 
-if __name__ == "__main__":
-    folder_with_background_train = './data/background_images_train/'
-    folder_with_background_val = './data/background_images_val/'
-    folder_for_dataset = './data/yolo_tibetan'
-    folder_for_train_data = f'{folder_for_dataset}/train/'
-    folder_for_val_data = f'{folder_for_dataset}/val/'
-    folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'
+def main():
+    parser = argparse.ArgumentParser(description="Generate YOLO dataset for Tibetan text detection")
 
-    dataset_dict = generate_data(5000, folder_with_background_train, folder_for_train_data, folder_with_corpoare)
-    generate_data(500, folder_with_background_val, folder_for_val_data, folder_with_corpoare)
-    dataset_dict['path'] = folder_for_dataset
+    parser.add_argument('--background_train', type=str, default='./data/background_images_train/',
+                        help='Folder with background images for training')
+    parser.add_argument('--background_val', type=str, default='./data/background_images_val/',
+                        help='Folder with background images for validation')
+    parser.add_argument('--dataset_folder', type=str, default='./data/yolo_tibetan/',
+                        help='Folder for the generated YOLO dataset')
+    parser.add_argument('--corpora_folder', type=str, default='./data/corpora/UVA Tibetan Spoken Corpus/',
+                        help='Folder with Tibetan tibetan numbers corpora')
+    parser.add_argument('--train_samples', type=int, default=1000,
+                        help='Number of training samples to generate')
+    parser.add_argument('--val_samples', type=int, default=100,
+                        help='Number of validation samples to generate')
+    parser.add_argument('--no_cols', type=int, default=1,
+                        help='Number of text columns to generate [1....5]')
+    parser.add_argument('--font_path', type=str, default='ext/Microsoft Himalaya.ttf',
+                        help='Path to a font file that supports Tibetan characters')
+    parser.add_argument('--single_label', action='store_true',
+                        help='Use a single label "tibetan" for all files instead of using filenames as labels')
 
-    with open(f"{folder_for_dataset}/tibetan_text_boxes.yml", 'w') as yaml_file:
+
+    args = parser.parse_args()
+
+    dataset_dict = generate_data(args, validation = False)
+    generate_data(args, validation = True)
+    dataset_dict['path'] = args.dataset_folder
+
+    def represent_ordereddict(dumper, data):
+        return dumper.represent_mapping('tag:yaml.org,2002:map', data.items())
+
+    yaml.add_representer(OrderedDict, represent_ordereddict)
+
+    with open(f"{args.dataset_folder}/tibetan_yolo.yml", 'w') as yaml_file:
         yaml.dump(dataset_dict, yaml_file, default_flow_style=False)
+
+
+if __name__ == "__main__":
+    main()
