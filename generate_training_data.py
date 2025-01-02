@@ -8,6 +8,7 @@ import yaml
 import numpy as np
 from tqdm import tqdm
 from utils import hash_current_time
+import argparse
 
 import multiprocessing
 
@@ -123,7 +124,7 @@ def generate_lorem_like_tibetan_text(length):
     return ' '.join(words)
 
 
-def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path='res/Microsoft Himalaya.ttf', font_size=24):
+def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path, font_size=24):
     """
     Embed text within a specified rectangular box on an image, terminating the text if it surpasses the bounding box.
 
@@ -169,7 +170,7 @@ def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path=
     return image
 
 
-def generate_sample(images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False):
+def generate_sample(images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False, font_path ='res/Microsoft Himalaya.ttf'):
     ctr = hash_current_time()
 
     image_id = random.randint(0, len(images)-1)
@@ -204,8 +205,8 @@ def generate_sample(images, label, label_id, folder_with_background, folder_with
             print(f"position of box in col {i}: ({box_position[0]},{box_position[1]})")
             print(f" >> max size ({max_box_size[0]},{max_box_size[1]})")
 
-        bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size)
-        magazine_image = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size)
+        bbox = calculate_wrapped_text_bounding_box(text_to_embed, max_box_size, font_path)
+        magazine_image = embed_text_in_box_with_limit(magazine_image, text_to_embed, box_position, max_box_size, font_path)
         bbox = np.array(bbox)
         x = box_position[0]
         y = box_position[1]
@@ -229,7 +230,7 @@ def generate_sample(images, label, label_id, folder_with_background, folder_with
         file.write(bbox_str)
 
 
-def generate_data(no_images = 5000, folder_with_background = './data/background_images/', folder_for_train_data = './data/train/', folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/'):
+def generate_data(no_images = 5000, folder_with_background = './data/background_images/', folder_for_train_data = './data/train/', folder_with_corpoare = 'data/corpora/UVA Tibetan Spoken Corpus/', font_path=''):
 
     label = 'tibetan'
     label_id = 0
@@ -241,7 +242,7 @@ def generate_data(no_images = 5000, folder_with_background = './data/background_
 
     pool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
 
-    args = (images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data)
+    args = (images, label, label_id, folder_with_background, folder_with_corpoare, folder_for_train_data, False, font_path)
 
     number_of_calls = no_images
     max_parallel_calls = os.cpu_count()
@@ -256,6 +257,41 @@ def generate_data(no_images = 5000, folder_with_background = './data/background_
     return dataset_dict
 
 
+def main():
+    parser = argparse.ArgumentParser(description="Generate YOLO dataset for Tibetan text detection")
+
+    parser.add_argument('--background_train', type=str, default='./ext/TibetanOCR/data/background_images_train/',
+                        help='Folder with background images for training')
+    parser.add_argument('--background_val', type=str, default='./ext/TibetanOCR/background_images_val/',
+                        help='Folder with background images for validation')
+    parser.add_argument('--dataset_folder', type=str, default='./data/yolo_tibetan/',
+                        help='Folder for the generated YOLO dataset')
+    parser.add_argument('--corpora_folder', type=str, default='./ext/TibetanOCR/data/corpora/UVA Tibetan Spoken Corpus/',
+                        help='Folder with Tibetan corpora')
+    parser.add_argument('--train_samples', type=int, default=1,
+                        help='Number of training samples to generate')
+    parser.add_argument('--val_samples', type=int, default=1,
+                        help='Number of validation samples to generate')
+    parser.add_argument('--font_path', type=str, default='ext/Himalaya.ttf',
+                        help='Path to a font file that supports Tibetan characters')
+
+    args = parser.parse_args()
+
+    folder_for_train_data = f'{args.dataset_folder}/train/'
+    folder_for_val_data = f'{args.dataset_folder}/val/'
+
+    dataset_dict = generate_data(args.train_samples, args.background_train, folder_for_train_data, args.corpora_folder, args.font_path)
+    generate_data(args.val_samples, args.background_val, folder_for_val_data, args.corpora_folder, args.font_path)
+    dataset_dict['path'] = args.dataset_folder
+
+    with open(f"{args.dataset_folder}/tibetan_text_boxes.yml", 'w') as yaml_file:
+        yaml.dump(dataset_dict, yaml_file, default_flow_style=False)
+
+
+if __name__ == "__main__":
+    main()
+
+'''
 if __name__ == "__main__":
     folder_with_background_train = './data/background_images_train/'
     folder_with_background_val = './data/background_images_val/'
@@ -270,3 +306,4 @@ if __name__ == "__main__":
 
     with open(f"{folder_for_dataset}/tibetan_text_boxes.yml", 'w') as yaml_file:
         yaml.dump(dataset_dict, yaml_file, default_flow_style=False)
+'''
