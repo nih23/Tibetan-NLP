@@ -1,8 +1,13 @@
 import re
 from collections import OrderedDict
+from pathlib import Path
+
+from ultralytics.cfg import get_cfg
+from ultralytics.data.utils import DATASETS_DIR
 
 from PIL import Image, ImageDraw, ImageFont
 from yolo_utils import prepare_bbox_string
+
 
 import io
 import os
@@ -172,13 +177,15 @@ def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path,
     return image
 
 
-def generate_sample(images, label_dict, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False, font_path ='res/Microsoft Himalaya.ttf', no_cols_max=3, single_label = False):
+def generate_sample(images, label_dict, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False, font_path ='res/Microsoft Himalaya.ttf', no_cols_max=3, single_label = False, image_size=1024):
     ctr = hash_current_time()
 
     image_id = random.randint(0, len(images)-1)
     image_path = folder_with_background + "/" + images[image_id]
     with open(image_path, "rb") as image_file:
         magazine_image = Image.open(io.BytesIO(image_file.read()))
+
+    magazine_image = magazine_image.resize((image_size,image_size), Image.Resampling.LANCZOS)
 
     dx, dy = magazine_image.size
     no_cols = random.randint(1, no_cols_max)
@@ -260,11 +267,11 @@ def fill_label_dict(folder_path):
 
 def generate_data(args, validation = False):
     folder_with_background = args.background_train
-    folder_for_train_data = f'{args.dataset_folder}/train/'
+    folder_for_train_data = f'{args.dataset_name}/train/'
     no_samples = args.train_samples
     if(validation):
         folder_with_background = args.background_val
-        folder_for_train_data = f'{args.dataset_folder}/val/'
+        folder_for_train_data = f'{args.dataset_name}/val/'
         no_samples = args.val_samples
 
     label_dict = {'tibetan': 0}
@@ -276,7 +283,7 @@ def generate_data(args, validation = False):
 
     pool = multiprocessing.Pool(processes=multiprocessing.cpu_count())
 
-    args = (images, label_dict, folder_with_background, args.corpora_folder, folder_for_train_data, False, args.font_path, args.no_cols, args.single_label)
+    args = (images, label_dict, folder_with_background, args.corpora_folder, folder_for_train_data, False, args.font_path, args.no_cols, args.single_label, args.image_size)
 
     number_of_calls = no_samples
     max_parallel_calls = os.cpu_count()
@@ -304,7 +311,7 @@ def main():
                         help='Folder with background images for training')
     parser.add_argument('--background_val', type=str, default='./data/background_images_val/',
                         help='Folder with background images for validation')
-    parser.add_argument('--dataset_folder', type=str, default='./data/yolo_tibetan/',
+    parser.add_argument('--dataset_name', type=str, default='yolo_tibetan/',
                         help='Folder for the generated YOLO dataset')
     parser.add_argument('--corpora_folder', type=str, default='./data/corpora/UVA Tibetan Spoken Corpus/',
                         help='Folder with Tibetan tibetan numbers corpora')
@@ -318,22 +325,34 @@ def main():
                         help='Path to a font file that supports Tibetan characters')
     parser.add_argument('--single_label', action='store_true',
                         help='Use a single label "tibetan" for all files instead of using filenames as labels')
-
+    parser.add_argument('--image_size', type=int, default=1024,
+                        help='size (pixels) of each image')
 
     args = parser.parse_args()
+    # Read default settings
+
+    datasets_dir = Path(DATASETS_DIR)
+    path = str(datasets_dir / args.dataset_name)
+    args.dataset_name = path
+    print(f"Generating YOLO dataset {args.dataset_name}...")
 
     dataset_dict = generate_data(args, validation = False)
     generate_data(args, validation = True)
-    dataset_dict['path'] = args.dataset_folder
+
+    dataset_dict['path'] = args.dataset_name
+
 
     def represent_ordereddict(dumper, data):
         return dumper.represent_mapping('tag:yaml.org,2002:map', data.items())
 
     yaml.add_representer(OrderedDict, represent_ordereddict)
 
-    with open(f"{args.dataset_folder}/tibetan_yolo.yml", 'w') as yaml_file:
+    with open(f"{args.dataset_name}/ultralytics.yml", 'w') as yaml_file:
         yaml.dump(dataset_dict, yaml_file, default_flow_style=False)
 
+    print("Training can be started with the following command:\n\n"
+          f"yolo detect train data=yolo detect train data={args.dataset_name}/ultralytics.yml epochs=100 imgsz=1024 model=yolo11n.pt\n"
+          "")
 
 if __name__ == "__main__":
     main()
