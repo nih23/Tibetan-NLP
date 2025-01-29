@@ -1,6 +1,9 @@
 import os
 from PIL import Image, ImageDraw, ImageFont
 
+from tibetanDataGenerator.data.augmentation import AugmentationStrategy
+
+
 class ImageBuilder:
     def __init__(self, image_size=(1024, 1024)):
         self.image = Image.new('RGB', image_size, color='white')  # Leeres Bild standardmäßig
@@ -70,6 +73,21 @@ class ImageBuilder:
         w, h = size
         self.draw.rectangle([x, y, x + w, y + h], outline=color, width=2)
         return self
+
+    def apply_augmentation(self, augmentation_strategy):
+        """
+        Apply an augmentation strategy to the current image.
+
+        :param augmentation_strategy: An instance of AugmentationStrategy
+        :return: self for method chaining
+        """
+        if not isinstance(augmentation_strategy, AugmentationStrategy):
+            raise ValueError("augmentation_strategy must be an instance of AugmentationStrategy")
+
+        self.image = augmentation_strategy.apply(self.image)
+        self.draw = ImageDraw.Draw(self.image)
+        return self
+
 
     def save(self, output_path):
         """

@@ -39,8 +39,22 @@ class TextGenerator:
 
 class SyntheticTextGenerator(TextGenerator):
     def generate_text(self):
-        # Generiere zufälligen tibetischen Text
-        pass
+        """
+        Generate a lorem ipsum like Tibetan text string of a specified length.
+
+        This function creates words of random lengths and separates them with a space,
+        similar to the structure of lorem ipsum text.
+        """
+        tibetan_range = (0x0F40, 0x0FBC)  # Restricting range to more common characters
+        no_words = random.randint(1,50)
+        word_lengths = [random.randint(2, 10) for _ in range(no_words)]
+
+        words = []
+        for word_length in word_lengths:
+            word = ''.join(chr(random.randint(*tibetan_range)) for _ in range(word_length))
+            words.append(word)
+
+        return ' '.join(words)
 
 class CorpusTextGenerator(TextGenerator):
     def __init__(self, corpus_dir):
