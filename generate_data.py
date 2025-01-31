@@ -22,6 +22,7 @@ augmentation_strategies = {
 def generate_synthetic_image(images, label_dict, folder_with_background, folder_with_corpoare, folder_for_train_data, debug = False, font_path ='res/Microsoft Himalaya.ttf', single_label = False, image_size=1024, augmentation="noise"):
     ctr = hash_current_time()  # Assuming this function is defined elsewhere
     font_size = 24
+    border_offset = int(0.05 * image_size)
 
     # Select random background image
     image_path = os.path.join(folder_with_background, random.choice(images))
@@ -40,19 +41,19 @@ def generate_synthetic_image(images, label_dict, folder_with_background, folder_
 
     bbox_str = ""
 
-    max_box_size_w = random.randint(100, 300)
+    max_box_size_w = random.randint(100, image_size)
     max_box_size = (max_box_size_w, 400)
 
     fitted_box_size = BoundingBoxCalculator.fit(text, max_box_size, font_size=font_size,
                                                 font_path=font_path)
 
-    box_pos_x = random.randint(0, fitted_box_size[0])
-    box_pos_y = random.randint(0, fitted_box_size[1])
+    box_pos_x = random.randint(border_offset, image_size - (fitted_box_size[0]+border_offset))
+    box_pos_y = random.randint(border_offset, image_size - (fitted_box_size[1]+border_offset))
     box_position = (box_pos_x, box_pos_y)
 
     # Add text and bounding box
     builder.add_text(text, box_position, fitted_box_size)
-    #builder.add_bounding_box(box_position, fitted_box_size)
+    builder.add_bounding_box(box_position, fitted_box_size)
 
     # Apply augmentation
     augmentation = augmentation_strategies[augmentation.lower()]
@@ -105,7 +106,7 @@ def fill_label_dict(folder_path):
     return label_dict
 
 
-def generate_data(args, validation = False):
+def generate_dataset(args, validation = False):
     folder_with_background = args.background_train
     folder_for_train_data = f'{args.dataset_name}/train/'
     no_samples = args.train_samples
@@ -180,8 +181,8 @@ def main():
     args.dataset_name = path
     print(f"Generating YOLO dataset {args.dataset_name}...")
 
-    dataset_dict = generate_data(args, validation = False)
-    generate_data(args, validation = True)
+    dataset_dict = generate_dataset(args, validation = False)
+    generate_dataset(args, validation = True)
 
     dataset_dict['path'] = args.dataset_name
 
