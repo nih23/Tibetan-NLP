@@ -33,7 +33,7 @@ def generate_synthetic_image(images, label_dict, folder_with_background, folder_
 
     # Generate text
     text_generator = TextFactory.create_text_source("corpus", folder_with_corpoare)
-    text = text_generator.generate_text()
+    text, file_name = text_generator.generate_text()
 
     # Calculate bounding box
     dx, dy = image_size, image_size
@@ -59,7 +59,7 @@ def generate_synthetic_image(images, label_dict, folder_with_background, folder_
     builder.apply_augmentation(augmentation)
 
     # Prepare bounding box string
-    label = next(iter(label_dict.keys())) if single_label else os.path.splitext(text)[0]
+    label = next(iter(label_dict.keys())) if single_label else os.path.splitext(file_name)[0]
     label_id = label_dict[label]
     x, y = box_position
     w, h = fitted_box_size
@@ -70,9 +70,13 @@ def generate_synthetic_image(images, label_dict, folder_with_background, folder_
     image_path = os.path.join(folder_for_train_data, 'images', image_filename)
     builder.save(image_path)
 
+    # Ensure the labels directory exists
+    labels_dir = os.path.join(folder_for_train_data, 'labels')
+    os.makedirs(labels_dir, exist_ok=True)
+
     # Save label
     label_filename = f"{label}_{ctr}.txt"
-    label_path = os.path.join(folder_for_train_data, 'labels', label_filename)
+    label_path = os.path.join(labels_dir, label_filename)
     with open(label_path, 'w') as f:
         f.write(bbox_str)
 
@@ -125,6 +129,8 @@ def generate_data(args, validation = False):
     max_parallel_calls = os.cpu_count()
 
     # Create a pool of workers, limited to no. cpu parallel processes for generation of training data
+
+    #results = generate_synthetic_image(*args)
     with multiprocessing.Pool(max_parallel_calls) as pool:
         results = pool.starmap(generate_synthetic_image, [args] * number_of_calls)
 
@@ -149,7 +155,7 @@ def main():
                         help='Folder with background images for validation')
     parser.add_argument('--dataset_name', type=str, default='yolo_tibetan/',
                         help='Folder for the generated YOLO dataset')
-    parser.add_argument('--corpora_folder', type=str, default='./data/corpora/UVA Tibetan Spoken Corpus/',
+    parser.add_argument('--corpora_folder', type=str, default='./data/corpora/Tibetan Number Words/',
                         help='Folder with Tibetan tibetan numbers corpora')
     parser.add_argument('--train_samples', type=int, default=100,
                         help='Number of training samples to generate')

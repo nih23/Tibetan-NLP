@@ -15,23 +15,6 @@ class TextFactory:
             raise ValueError(f"Unknown source type: {source_type}")
 
 class TextGenerator:
-    @staticmethod
-    def generate_random_text(length):
-        """
-        Generate a lorem ipsum like Tibetan text string of a specified length.
-
-        This function creates words of random lengths and separates them with a space,
-        similar to the structure of lorem ipsum text.
-        """
-        tibetan_range = (0x0F40, 0x0FBC)  # Restricting range to more common characters
-        word_lengths = [random.randint(2, 10) for _ in range(length // 5)]
-
-        words = []
-        for word_length in word_lengths:
-            word = ''.join(chr(random.randint(*tibetan_range)) for _ in range(word_length))
-            words.append(word)
-
-        return ' '.join(words)
 
     @abc.abstractmethod
     def generate_text(self):
@@ -54,7 +37,7 @@ class SyntheticTextGenerator(TextGenerator):
             word = ''.join(chr(random.randint(*tibetan_range)) for _ in range(word_length))
             words.append(word)
 
-        return ' '.join(words)
+        return ' '.join(words), None
 
 class CorpusTextGenerator(TextGenerator):
     def __init__(self, corpus_dir):
@@ -63,7 +46,7 @@ class CorpusTextGenerator(TextGenerator):
     def generate_text(self):
         # Wähle zufälligen Text aus dem Corpus
         text_to_embed, filename = self._read_random_tibetan_file()
-        return text_to_embed
+        return text_to_embed, filename
 
     def _read_random_tibetan_file(self):
         """
