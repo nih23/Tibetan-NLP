@@ -47,13 +47,16 @@ def generate_synthetic_image(images, label_dict, folder_with_background, folder_
     fitted_box_size = BoundingBoxCalculator.fit(text, max_box_size, font_size=font_size,
                                                 font_path=font_path)
 
-    box_pos_x = random.randint(border_offset, image_size - (fitted_box_size[0]+border_offset))
-    box_pos_y = random.randint(border_offset, image_size - (fitted_box_size[1]+border_offset))
-    box_position = (box_pos_x, box_pos_y)
+    text_pos_x = random.randint(border_offset, image_size - (fitted_box_size[0]+border_offset))
+    text_pos_y = random.randint(border_offset, image_size - (fitted_box_size[1]+border_offset))
+
+    text_position = (text_pos_x, text_pos_y)
+    box_position = (text_pos_x + int(fitted_box_size[0]/2), text_pos_y - int(fitted_box_size[1]/2))
 
     # Add text and bounding box
-    builder.add_text(text, box_position, fitted_box_size)
-    builder.add_bounding_box(box_position, fitted_box_size)
+    builder.add_text(text, text_position, fitted_box_size)
+    if(debug):
+        builder.add_bounding_box(box_position, fitted_box_size)
 
     # Apply augmentation
     augmentation = augmentation_strategies[augmentation.lower()]
@@ -64,6 +67,8 @@ def generate_synthetic_image(images, label_dict, folder_with_background, folder_
     label_id = label_dict[label]
     x, y = box_position
     w, h = fitted_box_size
+    # Ultralytics YOLO format: class x_center y_center width height
+    # Box coordinates must be in normalized xywh format (0..1)
     bbox_str += f"{label_id} {x / dx} {y / dy} {w / dx} {h / dy}\n"
 
     # Save image
