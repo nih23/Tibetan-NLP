@@ -1,4 +1,4 @@
-# Tibetan Column Detection
+# Tibetan OCR Tools
 
 ## Overview
 This Python project focuses on generating training data for detecting columns or text blocks of Tibetan texts by embedding Tibetan text into images. It provides a flexible and customizable way to create datasets for machine learning models, particularly for YOLO-based object detection tasks.
