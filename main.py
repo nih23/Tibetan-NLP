@@ -1,68 +1,73 @@
 import argparse
-from tibetanDataGenerator.utils.data_loader import TextFactory
-from tibetanDataGenerator.data.text_renderer import ImageBuilder
-from tibetanDataGenerator.data.augmentation import RotateAugmentation, NoiseAugmentation
-from tibetanDataGenerator.utils.bounding_box import BoundingBoxCalculator
+from pathlib import Path
+import yaml
+from collections import OrderedDict
+from ultralytics.data.utils import DATASETS_DIR
+from tibetanDataGenerator.dataset_generator import generate_dataset
 
-# Define a dictionary of augmentation strategies
-augmentation_strategies = {
-    'rotate': RotateAugmentation(),
-    'noise': NoiseAugmentation()
-}
-
-text_sources = {
-    "synthetic": lambda _: TextFactory.create_text_source("synthetic"),
-    "corpus": lambda path: TextFactory.create_text_source("corpus", path)
-}
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Generate synthetic Tibetan text images")
-    parser.add_argument("--bg", default="data/background_images_train/Dalle_1.png", help="Path to background image")
-    parser.add_argument("--font", default="ext/Microsoft Himalaya.ttf", help="Path to font file")
-    parser.add_argument("--image_size", nargs=2, type=int, default=[768, 768], help="Image size (width height)")
-    parser.add_argument("--box_pos", nargs=2, type=int, default=[200, 200], help="Bounding box position (x y)")
-    parser.add_argument("--box_size", nargs=2, type=int, default=[300, 150], help="Initial bounding box size (width height)")
-    parser.add_argument("--font_size", type=int, default=45, help="Font size")
-    parser.add_argument("--text_source", choices=list(text_sources.keys()), default="corpus",
-                        help=f"Text source type {text_sources.keys()}")
-    parser.add_argument("--corpus_path", default="data/corpora/Tibetan Number Words/",
-                        help="Path to corpus (if text_source is 'corpus')")
-    parser.add_argument("--output", default="./test.png", help="Output image path")
-    parser.add_argument("--augmentation", choices=list(augmentation_strategies.keys()), default='noise',
-                        help="Type of augmentation to apply")
-
-    return parser.parse_args()
 
 def main():
-    args = parse_args()
+    parser = argparse.ArgumentParser(description="Generate YOLO dataset for Tibetan text detection")
 
-    # Generate text
-    text_generator = text_sources[args.text_source](args.corpus_path)
-    text = text_generator.generate_text()
+    parser.add_argument('--background_train', type=str, default='./data/background_images_train/',
+                        help='Folder with background images for training')
+    parser.add_argument('--background_val', type=str, default='./data/background_images_val/',
+                        help='Folder with background images for validation')
+    parser.add_argument('--dataset_name', type=str, default='yolo_tibetan/',
+                        help='Folder for the generated YOLO dataset')
+    parser.add_argument('--corpora_folder', type=str, default='./data/corpora/Tibetan Number Words/',
+                        help='Folder with Tibetan tibetan numbers corpora')
+    parser.add_argument('--train_samples', type=int, default=100,
+                        help='Number of training samples to generate')
+    parser.add_argument('--val_samples', type=int, default=100,
+                        help='Number of validation samples to generate')
+    parser.add_argument('--no_cols', type=int, default=1,
+                        help='Number of text columns to generate [1....5]')
+    parser.add_argument('--font_path', type=str, default='ext/Microsoft Himalaya.ttf',
+                        help='Path to a font file that supports Tibetan characters')
+    parser.add_argument('--single_label', action='store_true',
+                        help='Use a single label "tibetan" for all files instead of using filenames as labels')
+    parser.add_argument('--debug', action='store_true',
+                        help='More verbose output with debug information about the image generation process.')
+    parser.add_argument('--image_size', type=int, default=1024,
+                        help='size (pixels) of each image')
+    parser.add_argument("--augmentation", choices=['rotate', 'noise'], default='noise',
+                        help="Type of augmentation to apply")
 
+    args = parser.parse_args()
 
-    # The builder actually builds our synthetic image from different components
-    builder = ImageBuilder(tuple(args.image_size))
+    datasets_dir = Path(DATASETS_DIR)
+    path = str(datasets_dir / args.dataset_name)
+    args.dataset_name = path
+    print(f"Generating YOLO dataset {args.dataset_name}...")
 
-    # retrofit the bounding box height to the actual height
-    # when the text is wrapped by the initial bounding box' width.
-    fitted_box_size = BoundingBoxCalculator.fit(text, tuple(args.box_size), font_size=args.font_size, font_path=args.font)
+    # Generate training dataset
+    train_dataset_dict = generate_dataset(args, validation=False)
 
-    augmentation = augmentation_strategies[args.augmentation]
+    # Generate validation dataset
+    val_dataset_dict = generate_dataset(args, validation=True)
 
-    # construct our image
-    image = (
-        builder.set_background(args.bg)
-        .set_font(args.font, font_size=args.font_size)
-        .add_text(text, tuple(args.box_pos), fitted_box_size)
-        .apply_augmentation(augmentation)
-        .add_bounding_box(tuple(args.box_pos), fitted_box_size)
-    )
+    # Combine train and val dataset information
+    dataset_dict = {
+        'path': args.dataset_name,
+        'train': 'train/images',
+        'val': 'val/images',
+        'nc': train_dataset_dict['nc'],
+        'names': train_dataset_dict['names']
+    }
 
+    def represent_ordereddict(dumper, data):
+        return dumper.represent_mapping('tag:yaml.org,2002:map', data.items())
 
-    # Debugging
-    image.show()
-    image.save(args.output)
+    yaml.add_representer(OrderedDict, represent_ordereddict)
+
+    with open(f"{args.dataset_name}/data.yml", 'w') as yaml_file:
+        yaml.dump(dataset_dict, yaml_file, default_flow_style=False)
+
+    print("Dataset generation completed.")
+    print("Training can be started with the following command:\n")
+    print(f"yolo detect train data={args.dataset_name}/data.yml epochs=100 imgsz=1024 model=yolov8n.pt")
+
 
 if __name__ == "__main__":
     main()
