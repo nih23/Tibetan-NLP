@@ -86,51 +86,6 @@ def calculate_wrapped_text_bounding_box(text, box_size, font_path='res/Microsoft
     return actual_text_width, y_offset
 
 
-def read_random_tibetan_file(directory):
-    """
-    Read a random text file containing Tibetan text from a specified directory.
-
-    :param directory: The directory containing Tibetan text files.
-    :return: Content of a randomly selected text file.
-    """
-    # List all files in the specified directory
-    files = [f for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f))]
-    if not files:
-        return "No files found in the specified directory."
-
-    # Randomly select a file
-    random_file = random.choice(files)
-    file_path = os.path.join(directory, random_file)
-
-    # Read the content of the file
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            content = file.read()
-    except Exception as e:
-        return f"Error reading file {random_file}: {e}"
-
-    return content, random_file
-
-
-
-def generate_lorem_like_tibetan_text(length):
-    """
-    Generate a lorem ipsum like Tibetan text string of a specified length.
-    
-    This function creates words of random lengths and separates them with a space,
-    similar to the structure of lorem ipsum text.
-    """
-    tibetan_range = (0x0F40, 0x0FBC)  # Restricting range to more common characters
-    word_lengths = [random.randint(2, 10) for _ in range(length // 5)]
-    
-    words = []
-    for word_length in word_lengths:
-        word = ''.join(chr(random.randint(*tibetan_range)) for _ in range(word_length))
-        words.append(word)
-
-    return ' '.join(words)
-
-
 def embed_text_in_box_with_limit(image, text, box_position, box_size, font_path, font_size=24):
     """
     Embed text within a specified rectangular box on an image, terminating the text if it surpasses the bounding box.
