@@ -5,4 +5,4 @@ For rendering Chinese number words (e.g., 一, 二, 三...), the project intends
 *   **Font Information:** You can find details about the KaiTi font family on the Microsoft Typography page:
     [Microsoft Typography - KaiTi](https://learn.microsoft.com/en-us/typography/font-list/kaiti)
 
-*   **Current Status:** **Please note that the implementation within the Python scripts to specifically load and utilize the KaiTi font for drawing Chinese numbers (e.g., for Class ID 2) is still under active development.** The current scripts may load the *data* for Chinese numbers but might not yet be configured to render them using KaiTi, or may use a placeholder font. Future updates will focus on integrating this font correctly.
+*   **Current Status:** **Please note that the implementation within the Python scripts to specifically load and utilize the KaiTi font for drawing Chinese numbers (e.g., for Class ID 2) is still under active development.** 
