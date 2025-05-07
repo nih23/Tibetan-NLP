@@ -83,6 +83,28 @@ python train_model.py --epochs 100 --imgsz 1024 --export
 - `--export`: Export the model after training as TorchScript (flag)
 - `--patience`: EarlyStopping patience in epochs (default: 50)
 
+#### Weights & Biases Integration
+
+The training script includes integration with [Weights & Biases](https://wandb.ai/) for experiment tracking and visualization. To enable wandb logging:
+
+```bash
+python train_model.py --epochs 100 --wandb --wandb-project TibetanOCR
+```
+
+Weights & Biases arguments:
+
+- `--wandb`: Enable Weights & Biases logging (flag)
+- `--wandb-project`: W&B project name (default: 'TibetanOCR')
+- `--wandb-entity`: W&B entity (team or username)
+- `--wandb-tags`: Comma-separated tags for the experiment (e.g., "yolov8,tibetan")
+- `--wandb-name`: Name of the experiment in wandb (default: same as --name)
+
+When wandb logging is enabled, the script will:
+- Log training metrics (loss, mAP, precision, recall, etc.)
+- Upload dataset samples for visualization
+- Save model checkpoints as artifacts
+- Generate plots and confusion matrices
+
 Alternatively, you can still use the Ultralytics CLI directly:
 
 ```bash
