@@ -43,7 +43,7 @@ pip install -r requirements.txt
 ### Usage
 Run the dataset generation script with desired arguments:
 ```bash
-python generate_dataset.py --train_samples 1000 --val_samples 200 --augmentation rotate
+python generate_training_data.py --train_samples 1000 --val_samples 200 --augmentation rotate
 ```
 
 ### Command-line Arguments
@@ -144,6 +144,7 @@ python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best
 - `--download`: Download images instead of processing them directly (flag)
 - `--output`: Directory for saving downloaded images (default: 'sbb_images')
 - `--max-images`: Maximum number of images for inference (0 = all)
+- `--no-ssl-verify`: Ignore problems with SSL certificates
 
 ### Complete Workflow
 
@@ -151,7 +152,7 @@ Here's the complete start-to-end workflow:
 
 1. **Generate Dataset**:
    ```bash
-   python generate_dataset.py --train_samples 1000 --val_samples 200 --image_size 1024
+   python generate_training_data.py --train_samples 1000 --val_samples 200 --image_size 1024
    ```
 
 2. **Train Model**:
@@ -166,7 +167,7 @@ Here's the complete start-to-end workflow:
      ```
    - On Staatsbibliothek zu Berlin data:
      ```bash
-     python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript
+     python inference_sbb.py --ppn 1783542241 --model runs/detect/train/weights/best.torchscript --no-ssl-verify
      ```
 
 ## Contributing

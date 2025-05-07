@@ -8,6 +8,7 @@ import argparse
 import os
 import re
 import urllib.request
+import ssl
 import xml.etree.ElementTree as ET
 from pathlib import Path
 import tempfile
@@ -16,7 +17,7 @@ import io
 from ultralytics import YOLO
 
 
-def get_images_from_sbb(ppn):
+def get_images_from_sbb(ppn, verify_ssl=True):
     """
     Ruft Bilddaten von der Staatsbibliothek zu Berlin ab.
     
@@ -31,7 +32,16 @@ def get_images_from_sbb(ppn):
     
     try:
         metadata_url = f"https://content.staatsbibliothek-berlin.de/dc/{ppn}.mets.xml"
-        with urllib.request.urlopen(metadata_url) as response:
+        
+        # SSL-Kontext erstellen
+        if not verify_ssl:
+            print("SSL-Verifizierung deaktiviert")
+            ssl_context = ssl._create_unverified_context()
+        else:
+            ssl_context = None
+            
+        # URL öffnen mit oder ohne SSL-Verifizierung
+        with urllib.request.urlopen(metadata_url, context=ssl_context) as response:
             metadata = ET.parse(response).getroot()
             
             # Namespace für METS XML
@@ -56,7 +66,7 @@ def get_images_from_sbb(ppn):
     return files
 
 
-def download_image(url, output_dir=None):
+def download_image(url, output_dir=None, verify_ssl=True):
     """
     Lädt ein Bild von einer URL herunter und speichert es optional.
     
@@ -68,7 +78,14 @@ def download_image(url, output_dir=None):
         Pfad zum heruntergeladenen Bild oder das Bild im Speicher
     """
     try:
-        with urllib.request.urlopen(url) as response:
+        # SSL-Kontext erstellen
+        if not verify_ssl:
+            ssl_context = ssl._create_unverified_context()
+        else:
+            ssl_context = None
+            
+        # URL öffnen mit oder ohne SSL-Verifizierung
+        with urllib.request.urlopen(url, context=ssl_context) as response:
             image_data = response.read()
             
             # Extrahiere Dateinamen aus URL
@@ -97,7 +114,7 @@ def download_image(url, output_dir=None):
 def main():
     parser = argparse.ArgumentParser(description="Führe Inferenz mit einem trainierten YOLO-Modell für Tibetische OCR auf Daten der Staatsbibliothek Berlin durch")
 
-    parser.add_argument('--ppn', type=str, required=True,
+    parser.add_argument('--ppn', type=str, default='1783542241',
                         help='PPN (Pica Production Number) des Dokuments in der Staatsbibliothek zu Berlin')
     parser.add_argument('--model', type=str, required=True,
                         help='Pfad zum trainierten Modell (z.B. runs/detect/train/weights/best.pt oder best.torchscript)')
@@ -125,6 +142,8 @@ def main():
                         help='Speichere Konfidenzwerte in .txt Dateien')
     parser.add_argument('--max-images', type=int, default=0,
                         help='Maximale Anzahl an Bildern für die Inferenz (0 = alle)')
+    parser.add_argument('--no-ssl-verify', action='store_true',
+                        help='Deaktiviere SSL-Zertifikatsverifizierung (nicht empfohlen für Produktionsumgebungen)')
 
     args = parser.parse_args()
 
@@ -135,7 +154,7 @@ def main():
         return
 
     # Bilder von der Staatsbibliothek abrufen
-    image_urls = get_images_from_sbb(args.ppn)
+    image_urls = get_images_from_sbb(args.ppn, verify_ssl=not args.no_ssl_verify)
     
     if not image_urls:
         print("Keine Bilder gefunden. Beende Programm.")
@@ -159,7 +178,7 @@ def main():
         
         image_paths = []
         for url in image_urls:
-            image_path = download_image(url, output_dir)
+            image_path = download_image(url, output_dir, verify_ssl=not args.no_ssl_verify)
             if image_path:
                 image_paths.append(image_path)
         
@@ -192,7 +211,7 @@ def main():
                 print(f"Verarbeite Bild {i+1}/{len(image_urls)}: {url}")
                 try:
                     # Bild herunterladen (ohne zu speichern)
-                    image = download_image(url)
+                    image = download_image(url, verify_ssl=not args.no_ssl_verify)
                     if image is None:
                         continue
                     
