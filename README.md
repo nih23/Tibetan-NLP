@@ -41,9 +41,9 @@ pip install -r requirements.txt
 ```
 
 ### Usage
-Run the main script with desired arguments:
+Run the dataset generation script with desired arguments:
 ```bash
-python main.py --train_samples 1000 --val_samples 200 --augmentation rotate
+python generate_dataset.py --train_samples 1000 --val_samples 200 --augmentation rotate
 ```
 
 ### Command-line Arguments
@@ -63,25 +63,89 @@ python main.py --train_samples 1000 --val_samples 200 --augmentation rotate
 
 
 ### Training with YOLO
-After generating the dataset, you can train a YOLO model with [Ultralytics](https://docs.ultralytics.com/usage/cli/#train) using: 
+After generating the dataset, you can train a YOLO model using our dedicated training script:
+
+```bash
+python train_model.py --epochs 100 --imgsz 1024 --export
+```
+
+#### Training Script Arguments
+
+- `--dataset`: Name of the dataset folder (default: 'yolo_tibetan/')
+- `--model`: Path to the base model (default: 'yolov8n.pt')
+- `--epochs`: Number of training epochs (default: 100)
+- `--batch`: Batch size for training (default: 16)
+- `--imgsz`: Image size for training (default: 1024)
+- `--workers`: Number of workers for data loading (default: 8)
+- `--device`: Device for training (e.g., cpu, 0, 0,1,2,3 for multiple GPUs)
+- `--project`: Project name for output (default: 'runs/detect')
+- `--name`: Experiment name (default: 'train')
+- `--export`: Export the model after training as TorchScript (flag)
+- `--patience`: EarlyStopping patience in epochs (default: 50)
+
+Alternatively, you can still use the Ultralytics CLI directly:
 
 ```bash
 yolo detect train data=yolo_tibetan/data.yml epochs=100 imgsz=1024 model=yolov8n.pt
 ```
 
-The model is then converted into a torchscript for inference:
+The model is then converted into a TorchScript for inference:
 ```bash
-yolo detect export model=runs/detect/train9/weights/best.pt 
+yolo detect export model=runs/detect/train/weights/best.pt 
 ```
 
 ### Inference
-We can now employ our trained model for recognition and classification of tibetan text blocks as follows:
+We can employ our trained model for recognition and classification of Tibetan text blocks in several ways:
+
+#### Standard Inference
+For inference on local image files:
 
 ```bash
-yolo predict task=detect model=runs/detect/train9/weights/best.torchscript imgsz=1024 source=data/my_inference_data/*.jpg
+yolo predict task=detect model=runs/detect/train/weights/best.torchscript imgsz=1024 source=data/my_inference_data/*.jpg
 ```
 
-The results are then saved to folder `runs/detect/predict`
+The results are saved to folder `runs/detect/predict`
+
+#### Inference on Staatsbibliothek zu Berlin Data
+For inference on documents from the Staatsbibliothek zu Berlin, use our specialized script:
+
+```bash
+python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript
+```
+
+##### SBB Inference Script Arguments
+
+- `--ppn`: PPN (Pica Production Number) of the document in the Staatsbibliothek zu Berlin (required)
+- `--model`: Path to the trained model (required)
+- `--imgsz`: Image size for inference (default: 1024)
+- `--conf`: Confidence threshold for detections (default: 0.25)
+- `--download`: Download images instead of processing them directly (flag)
+- `--output`: Directory for saving downloaded images (default: 'sbb_images')
+- `--max-images`: Maximum number of images for inference (0 = all)
+
+### Complete Workflow
+
+Here's the complete start-to-end workflow:
+
+1. **Generate Dataset**:
+   ```bash
+   python generate_dataset.py --train_samples 1000 --val_samples 200 --image_size 1024
+   ```
+
+2. **Train Model**:
+   ```bash
+   python train_model.py --epochs 100 --export
+   ```
+
+3. **Run Inference**:
+   - On local images:
+     ```bash
+     yolo predict task=detect model=runs/detect/train/weights/best.torchscript imgsz=1024 source=data/my_inference_data/*.jpg
+     ```
+   - On Staatsbibliothek zu Berlin data:
+     ```bash
+     python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript
+     ```
 
 ## Contributing
 
