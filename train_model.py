@@ -4,61 +4,88 @@ Skript zum Trainieren eines YOLO-Modells mit den generierten Tibetischen OCR-Dat
 Unterstützt Weights & Biases (wandb) Logging für Experiment-Tracking.
 """
 
-import argparse
 import os
 from pathlib import Path
 import wandb
-from ultralytics import YOLO
+from ultralytics.data.utils import DATASETS_DIR
+
+# Importiere Funktionen aus der tibetan_utils-Bibliothek
+from tibetan_utils.arg_utils import create_train_parser
+from tibetan_utils.model_utils import ModelManager
+
+
+def initialize_wandb(args):
+    """
+    Initialize Weights & Biases logging.
+    
+    Args:
+        args: Command-line arguments
+        
+    Returns:
+        bool: Whether wandb was initialized
+    """
+    if not args.wandb:
+        return False
+        
+    wandb_name = args.wandb_name if args.wandb_name else args.name
+    wandb_tags = args.wandb_tags.split(',') if args.wandb_tags else None
+    
+    print(f"Initialisiere Weights & Biases Logging")
+    print(f"  Projekt: {args.wandb_project}")
+    print(f"  Entity: {args.wandb_entity or 'Standard'}")
+    print(f"  Run-Name: {wandb_name}")
+    
+    # Initialize wandb
+    wandb.init(
+        project=args.wandb_project,
+        entity=args.wandb_entity,
+        name=wandb_name,
+        tags=wandb_tags,
+        config={
+            "model": args.model,
+            "dataset": args.dataset,
+            "epochs": args.epochs,
+            "batch_size": args.batch,
+            "image_size": args.imgsz,
+            "patience": args.patience
+        }
+    )
+    
+    return True
+
+
+def save_model_to_wandb(model_path, export_path=None):
+    """
+    Save model to Weights & Biases as an artifact.
+    
+    Args:
+        model_path: Path to the model file
+        export_path: Path to the exported model file
+    """
+    if wandb.run is None:
+        return
+        
+    artifact = wandb.Artifact(name=f"model-{wandb.run.id}", type="model")
+    artifact.add_file(str(model_path))
+    
+    if export_path and os.path.exists(export_path):
+        artifact.add_file(str(export_path))
+        
+    wandb.log_artifact(artifact)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Trainiere ein YOLO-Modell mit Tibetischen OCR-Daten")
-
-    parser.add_argument('--dataset', type=str, default='yolo_tibetan/',
-                        help='Name des Datensatzes (Ordner im YOLO datasets Verzeichnis)')
-    parser.add_argument('--model', type=str, default='yolov8n.pt',
-                        help='Pfad zum Basis-Modell (z.B. yolov8n.pt, yolov8s.pt, yolov8m.pt)')
-    parser.add_argument('--epochs', type=int, default=100,
-                        help='Anzahl der Trainings-Epochen')
-    parser.add_argument('--batch', type=int, default=16,
-                        help='Batch-Größe für das Training')
-    parser.add_argument('--imgsz', type=int, default=1024,
-                        help='Bildgröße für das Training (entspricht --image_size in main.py)')
-    parser.add_argument('--workers', type=int, default=8,
-                        help='Anzahl der Worker für das Datenladen')
-    parser.add_argument('--device', type=str, default='',
-                        help='Gerät für das Training (z.B. cpu, 0, 0,1,2,3 für mehrere GPUs)')
-    parser.add_argument('--project', type=str, default='runs/detect',
-                        help='Projektname für die Ausgabe')
-    parser.add_argument('--name', type=str, default='train',
-                        help='Experimentname')
-    parser.add_argument('--export', action='store_true',
-                        help='Exportiere das Modell nach dem Training als TorchScript')
-    parser.add_argument('--patience', type=int, default=50,
-                        help='EarlyStopping-Geduld (Epochen ohne Verbesserung)')
-    
-    # Weights & Biases Argumente
-    parser.add_argument('--wandb', action='store_true',
-                        help='Aktiviere Weights & Biases Logging')
-    parser.add_argument('--wandb-project', type=str, default='TibetanOCR',
-                        help='Weights & Biases Projektname')
-    parser.add_argument('--wandb-entity', type=str, default=None,
-                        help='Weights & Biases Entity (Team oder Benutzername)')
-    parser.add_argument('--wandb-tags', type=str, default=None,
-                        help='Komma-getrennte Tags für das Experiment (z.B. "yolov8,tibetan")')
-    parser.add_argument('--wandb-name', type=str, default=None,
-                        help='Name des Experiments in wandb (Standard: gleich wie --name)')
-
+    # Parse arguments
+    parser = create_train_parser()
     args = parser.parse_args()
 
-    # Pfad zur Datensatz-Konfiguration
-    from ultralytics.data.utils import DATASETS_DIR
+    # Path to dataset configuration
     data_path = Path(DATASETS_DIR) / args.dataset / 'data.yml'
     
     if not data_path.exists():
         print(f"Fehler: Datensatz-Konfiguration nicht gefunden: {data_path}")
-        print("Bitte generiere zuerst den Datensatz mit main.py:")
-        print("python main.py --train_samples 1000 --val_samples 200 --image_size 1024")
+        print("Bitte generiere zuerst den Datensatz mit generate_training_data.py:")
+        print("python generate_training_data.py --train_samples 1000 --val_samples 200 --image_size 1024")
         return
 
     print(f"Starte Training mit Datensatz: {data_path}")
@@ -66,80 +93,57 @@ def main():
     print(f"Epochen: {args.epochs}")
     print(f"Bildgröße: {args.imgsz}x{args.imgsz}")
     
-    # Weights & Biases initialisieren, wenn aktiviert
-    if args.wandb:
-        wandb_name = args.wandb_name if args.wandb_name else args.name
-        wandb_tags = args.wandb_tags.split(',') if args.wandb_tags else None
-        
-        print(f"Initialisiere Weights & Biases Logging")
-        print(f"  Projekt: {args.wandb_project}")
-        print(f"  Entity: {args.wandb_entity or 'Standard'}")
-        print(f"  Run-Name: {wandb_name}")
-        
-        # wandb initialisieren
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name=wandb_name,
-            tags=wandb_tags,
-            config={
-                "model": args.model,
-                "dataset": args.dataset,
-                "epochs": args.epochs,
-                "batch_size": args.batch,
-                "image_size": args.imgsz,
-                "patience": args.patience
-            }
-        )
+    # Initialize Weights & Biases if enabled
+    wandb_enabled = initialize_wandb(args)
 
-    # Modell laden
-    model = YOLO(args.model)
+    # Load model
+    model = ModelManager.load_model(args.model)
 
-    # Training starten
-    results = model.train(
-        data=str(data_path),
-        epochs=args.epochs,
-        imgsz=args.imgsz,
-        batch=args.batch,
-        workers=args.workers,
-        device=args.device,
-        project=args.project,
-        name=args.name,
-        patience=args.patience,
-        # Weights & Biases Konfiguration
-        plots=True,  # Plots für wandb generieren
-        save_period=10,  # Modell alle 10 Epochen speichern
-        # wandb-Logging aktivieren, wenn gewünscht
-        **({'upload_dataset': True, 'logger': 'wandb'} if args.wandb else {})
-    )
+    # Start training
+    train_args = {
+        'data': str(data_path),
+        'epochs': args.epochs,
+        'imgsz': args.imgsz,
+        'batch': args.batch,
+        'workers': args.workers,
+        'device': args.device,
+        'project': args.project,
+        'name': args.name,
+        'patience': args.patience,
+        'plots': True,
+        'save_period': 10,
+    }
+    
+    # Add wandb logging if enabled
+    if wandb_enabled:
+        train_args.update({
+            'upload_dataset': True,
+            'logger': 'wandb'
+        })
+    
+    # Train model
+    results = ModelManager.train_model(model, **train_args)
 
-    # Bestes Modell-Pfad
+    # Best model path
     best_model_path = Path(args.project) / args.name / 'weights' / 'best.pt'
     
     print(f"\nTraining abgeschlossen. Bestes Modell gespeichert unter: {best_model_path}")
 
-    # Modell exportieren, wenn gewünscht
+    # Export model if requested
+    export_path = None
     if args.export and best_model_path.exists():
         print("\nExportiere Modell als TorchScript...")
-        export_model = YOLO(str(best_model_path))
-        export_model.export(format='torchscript')
-        print(f"Modell exportiert nach: {best_model_path.with_suffix('.torchscript')}")
+        export_model = ModelManager.load_model(str(best_model_path))
+        export_path = ModelManager.export_model(export_model, format='torchscript')
+        print(f"Modell exportiert nach: {export_path}")
         
-        # Beispielbefehl für Inferenz
+        # Example command for inference
         print("\nBeispiel für Inferenz mit dem exportierten Modell:")
-        print(f"yolo predict task=detect model={best_model_path.with_suffix('.torchscript')} imgsz={args.imgsz} source=data/my_inference_data/*.jpg")
+        print(f"yolo predict task=detect model={export_path} imgsz={args.imgsz} source=data/my_inference_data/*.jpg")
     
-    # wandb beenden, wenn es verwendet wurde
-    if args.wandb:
-        # Modell-Artefakt zu wandb hinzufügen
-        if best_model_path.exists():
-            artifact = wandb.Artifact(name=f"model-{wandb.run.id}", type="model")
-            artifact.add_file(str(best_model_path))
-            if args.export and best_model_path.with_suffix('.torchscript').exists():
-                artifact.add_file(str(best_model_path.with_suffix('.torchscript')))
-            wandb.log_artifact(artifact)
-        
-        # wandb-Run beenden
+    # Save model to wandb if enabled
+    if wandb_enabled:
+        save_model_to_wandb(best_model_path, export_path)
         wandb.finish()
 
 

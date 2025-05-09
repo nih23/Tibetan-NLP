@@ -2,15 +2,14 @@
 
 ## Overview
 
-This Python project focuses on detecting columns or text blocks of Tibetan texts in images. It provides a complete pipeline from dataset generation to inference:
+This Python project focuses on detecting and recognizing Tibetan text in images. It provides a complete pipeline from dataset generation to OCR:
 
 1. **Dataset Generation**: Create synthetic training data by embedding Tibetan text into background images
 2. **Model Training**: Train a YOLO-based object detection model with optional Weights & Biases logging
 3. **Inference**: Detect Tibetan text blocks in new images, including support for Staatsbibliothek zu Berlin digital collections
+4. **OCR**: Apply Tesseract OCR to the detected text blocks to extract the actual text content
 
 ![Validation results](res/results_val_1.png)
-
-![Validation results](res/results_val_2.png)
 
 ## Quick Start Guide
 
@@ -23,23 +22,35 @@ cd Tibetan-NLP
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Install Tesseract OCR (required for text recognition)
+# Ubuntu/Debian: sudo apt-get install tesseract-ocr
+# macOS: brew install tesseract
+# Windows: Download installer from https://github.com/UB-Mannheim/tesseract/wiki
 ```
 
 ### Complete Workflow
 
 ```bash
 # 1. Generate dataset
-python generate_dataset.py --train_samples 1000 --val_samples 200 --image_size 1024
+python generate_training_data.py --train_samples 1000 --val_samples 200 --image_size 1024
 
 # 2. Train model
 python train_model.py --epochs 100 --export
 
-# 3. Run inference
+# 3. Run inference (object detection only)
 # On local images:
 yolo predict task=detect model=runs/detect/train/weights/best.torchscript imgsz=1024 source=data/my_inference_data/*.jpg
 
 # On Staatsbibliothek zu Berlin data:
 python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript
+
+# 4. Run OCR on detected text blocks
+# On local images:
+python ocr_on_detections.py --source data/my_inference_data/*.jpg --model runs/detect/train/weights/best.torchscript --lang bod
+
+# On Staatsbibliothek zu Berlin data:
+python ocr_on_detections.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript --lang bod
 ```
 
 ## Features
@@ -51,6 +62,30 @@ python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best
 - **Multiprocessing Support**: Leverage parallel processing for efficient dataset generation
 - **Experiment Tracking**: Integration with Weights & Biases for monitoring training progress
 - **Specialized Inference**: Support for Staatsbibliothek zu Berlin digital collections
+- **OCR Integration**: Extract text from detected text blocks using Tesseract OCR
+
+## Code Structure
+
+The project has been refactored to improve modularity and reduce redundancy:
+
+### Core Scripts
+
+- **generate_training_data.py**: Creates synthetic training data
+- **train_model.py**: Trains the YOLO model with optional W&B logging
+- **inference_sbb.py**: Performs inference on Staatsbibliothek zu Berlin data
+- **ocr_on_detections.py**: Applies OCR to detected text blocks
+
+### Utility Library
+
+The `tibetan_utils` package contains shared functionality used across the project:
+
+- **tibetan_utils.config**: Configuration constants and settings
+- **tibetan_utils.arg_utils**: Command-line argument parsing utilities
+- **tibetan_utils.io_utils**: File and directory operations
+- **tibetan_utils.image_utils**: Image processing functions
+- **tibetan_utils.model_utils**: Model loading, training, and inference
+- **tibetan_utils.ocr_utils**: OCR processing utilities
+- **tibetan_utils.sbb_utils**: Staatsbibliothek zu Berlin API integration
 
 ## Detailed Documentation
 
@@ -59,7 +94,7 @@ python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best
 The dataset generation script creates synthetic training data by embedding Tibetan text into background images.
 
 ```bash
-python generate_dataset.py --train_samples 1000 --val_samples 200 --augmentation rotate
+python generate_training_data.py --train_samples 1000 --val_samples 200 --augmentation rotate
 ```
 
 #### Dataset Generation Arguments
@@ -173,6 +208,51 @@ python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best
 | `--output` | Directory for saving downloaded images | 'sbb_images' |
 | `--max-images` | Maximum number of images for inference (0 = all) | 0 |
 | `--no-ssl-verify` | Disable SSL certificate verification | flag |
+
+### 4. OCR on Detected Text Blocks
+
+The OCR script applies Tesseract OCR to text blocks detected by the YOLO model:
+
+```bash
+python ocr_on_detections.py --source image.jpg --model runs/detect/train/weights/best.pt --lang bod
+```
+
+#### OCR Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--source` | Path to image or directory | required (if no --ppn) |
+| `--ppn` | PPN for Staatsbibliothek zu Berlin data | required (if no --source) |
+| `--model` | Path to the trained model | required |
+| `--lang` | Language for Tesseract OCR | 'eng+deu' |
+| `--tesseract-config` | Additional Tesseract configuration | '' |
+| `--save-crops` | Save cropped text blocks as images | flag |
+| `--output` | Directory for saving results | 'ocr_results' |
+| `--no-ssl-verify` | Disable SSL certificate verification | flag |
+
+#### OCR Output Format
+
+The script generates a JSON file for each processed image with the following structure:
+
+```json
+{
+  "image_name": "example.jpg",
+  "detections": [
+    {
+      "id": 0,
+      "box": {
+        "x": 0.5,
+        "y": 0.3,
+        "width": 0.2,
+        "height": 0.1
+      },
+      "confidence": 0.95,
+      "class": 0,
+      "text": "Recognized Tibetan text from this block"
+    }
+  ]
+}
+```
 
 ## Contributing
 
