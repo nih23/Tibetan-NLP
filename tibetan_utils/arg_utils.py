@@ -44,7 +44,7 @@ def add_output_arguments(parser):
         ArgumentParser: Updated parser
     """
     group = parser.add_argument_group('Output Options')
-    group.add_argument('--project', '--output', type=str, default=DEFAULT_OUTPUT_DIR,
+    group.add_argument('--output', type=str, default=DEFAULT_OUTPUT_DIR,
                       help='Directory for output')
     group.add_argument('--name', type=str, default='exp',
                       help='Experiment name')
@@ -164,7 +164,7 @@ def add_sbb_arguments(parser):
                       help='Disable SSL certificate verification (not recommended for production environments)')
     group.add_argument('--max-images', type=int, default=0,
                       help='Maximum number of images for inference (0 = all)')
-    group.add_argument('--output', type=str, default=DEFAULT_SBB_OUTPUT,
+    group.add_argument('--output_sbb_images', type=str, default=DEFAULT_SBB_OUTPUT,
                       help='Directory for saving downloaded images')
     return parser
 
@@ -186,7 +186,7 @@ def add_ocr_arguments(parser):
                       help='Additional Tesseract configuration')
     group.add_argument('--save-crops', action='store_true',
                       help='Save cropped text blocks as images')
-    group.add_argument('--output', type=str, default=DEFAULT_OCR_OUTPUT,
+    group.add_argument('--ocr-output', type=str, default=DEFAULT_OCR_OUTPUT,
                       help='Directory for saving OCR results')
     return parser
 

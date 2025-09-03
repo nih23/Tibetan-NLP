@@ -42,15 +42,9 @@ def main():
     # Parse arguments
     parser = create_sbb_inference_parser()
     
-    # Add YOLO-specific options
-    parser.add_argument('--save', action='store_true', default=True,
-                        help='Speichere Ergebnisse')
+    # Add YOLO-specific options (only those not already in create_sbb_inference_parser)
     parser.add_argument('--show', action='store_true',
                         help='Zeige Ergebnisse während der Inferenz an')
-    parser.add_argument('--save-txt', action='store_true',
-                        help='Speichere Ergebnisse als .txt Dateien')
-    parser.add_argument('--save-conf', action='store_true',
-                        help='Speichere Konfidenzwerte in .txt Dateien')
     
     args = parser.parse_args()
 
@@ -80,7 +74,7 @@ def main():
         'conf': args.conf,
         'device': args.device,
         'save': args.save,
-        'project': args.project,
+        'project': args.output,
         'name': args.name,
         'show': args.show,
         'save_txt': args.save_txt,
@@ -99,7 +93,7 @@ def main():
     )
     
     # Output directory
-    output_dir = Path(args.project) / args.name
+    output_dir = Path(args.output) / args.name
     print(f"\nInferenz abgeschlossen. Ergebnisse gespeichert unter: {output_dir}")
     
     # Results summary
