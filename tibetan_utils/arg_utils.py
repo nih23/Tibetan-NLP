@@ -126,7 +126,7 @@ def add_wandb_arguments(parser):
     """Add Weights & Biases arguments."""
     parser.add_argument('--wandb', action='store_true',
                        help='Enable Weights & Biases logging')
-    parser.add_argument('--wandb-project', type=str, default='TibetanOCR',
+    parser.add_argument('--wandb-project', type=str, default='PechaBridge',
                        help='W&B project name')
     parser.add_argument('--wandb-entity', type=str,
                        help='W&B entity (team or username)')

@@ -33,6 +33,7 @@ def main():
     args.dataset_name = str(full_dataset_path)
 
     print(f"Generiere Multi-Klassen YOLO-Datensatz in {args.dataset_name}...")
+    print("Speicherort kann geändert werden per `yolo settings`.")
     print("Unterstützte Klassen:")
     print("  - Klasse 0: tibetan_number_word (Tibetische Zahlen)")
     print("  - Klasse 1: tibetan_text (Allgemeiner tibetischer Text)")

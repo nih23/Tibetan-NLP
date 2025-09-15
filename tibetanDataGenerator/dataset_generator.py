@@ -4,6 +4,8 @@ import random
 import re
 import os
 import csv
+import time
+import traceback
 from typing import Tuple, Dict, List, Optional  # Added Optional
 
 import yaml
@@ -93,19 +95,68 @@ def generate_dataset(args: argparse.Namespace, validation: bool = False) -> Dict
     Returns:
         Dict: A dictionary containing dataset information.
     """
+    print(f"Starting dataset generation (validation={validation})...")
+    start_time = time.time()
+    
     dataset_info = _setup_dataset_info(args, validation)
+    print(f"Dataset info setup completed. Target samples: {dataset_info['no_samples']}")
+    
     label_dict = _create_label_dict(args)
+    print(f"Label dictionary created with {len(label_dict)} labels: {list(label_dict.keys())}")
+    
     background_images = _load_background_images(dataset_info['background_folder'])
+    print(f"Loaded {len(background_images)} background images from {dataset_info['background_folder']}")
 
     # _prepare_generation_args now gets annotations_file_path from args
     generation_args_tuple = _prepare_generation_args(args, dataset_info, label_dict, background_images)
+    print("Generation arguments prepared")
 
     results = _generate_images_in_parallel(generation_args_tuple, dataset_info['no_samples'])
+    
+    elapsed = time.time() - start_time
+    successful_results = [r for r in results if r[0] and r[1]]  # Filter out failed generations
+    print(f"Dataset generation completed in {elapsed:.1f}s. Success rate: {len(successful_results)}/{len(results)}")
 
     return _create_dataset_dict(str(dataset_info['folder']), label_dict)
 
 
 def generate_synthetic_image(
+        images: List[str],
+        label_dict: Dict[str, int],
+        folder_with_background: str,
+        corpora_tibetan_numbers_path: str,
+        corpora_tibetan_text_path: str,
+        corpora_chinese_numbers_path: str,
+        folder_for_train_data: str,
+        debug: bool = True,
+        font_path_tibetan: str = 'res/Microsoft Himalaya.ttf',
+        font_path_chinese: str = 'res/simkai.ttf',
+        single_label: bool = False,
+        image_width: int = 1024,
+        image_height: int = 361,
+        augmentation: str = "noise",
+        annotations_file_path: Optional[str] = None
+) -> Tuple[str, str]:
+    """
+    Generate a synthetic image with improved error handling and resource management.
+    """
+    try:
+        return _generate_synthetic_image_impl(
+            images, label_dict, folder_with_background,
+            corpora_tibetan_numbers_path, corpora_tibetan_text_path, corpora_chinese_numbers_path,
+            folder_for_train_data, debug, font_path_tibetan, font_path_chinese,
+            single_label, image_width, image_height, augmentation, annotations_file_path
+        )
+    except Exception as e:
+        # Log the error and return empty paths to indicate failure
+        print(f"Error in generate_synthetic_image: {e}")
+        if debug:
+            import traceback
+            traceback.print_exc()
+        return "", ""
+
+
+def _generate_synthetic_image_impl(
         images: List[str],
         label_dict: Dict[str, int],
         folder_with_background: str,
@@ -170,10 +221,11 @@ def generate_synthetic_image(
                     # Calculate font size for class 1 with bounding box constraints
                     text_for_sizing = text if text else "default"
                     max_font = BoundingBoxCalculator.find_max_font(
-                        text_for_sizing, 
+                        text_for_sizing,
                         (draw_box_size[0], draw_box_size[1]),
                         font_path_tibetan,
-                        max_size=100
+                        max_size=100,
+                        debug=debug
                     )
                     font_size_class1 = random.randint(24, max(24, min(100, max_font)))
                     
@@ -194,10 +246,11 @@ def generate_synthetic_image(
                     # Calculate font size for class 1 with bounding box constraints
                     text_for_sizing = text if text else "default"
                     max_font = BoundingBoxCalculator.find_max_font(
-                        text_for_sizing, 
+                        text_for_sizing,
                         (draw_box_size[0], draw_box_size[1]),
                         font_path_tibetan,
-                        max_size=100
+                        max_size=100,
+                        debug=debug
                     )
                     font_size_class1 = random.randint(24, max(24, min(100, max_font)))
                     builder.set_font(font_path_tibetan, font_size_class1)
@@ -214,10 +267,11 @@ def generate_synthetic_image(
                 # Ensure the text fits within the bounding box
                 # Calculate actual text dimensions and centered position
                 actual_text_box_size = BoundingBoxCalculator.fit(
-                    text, 
-                    draw_box_size, 
+                    text,
+                    draw_box_size,
                     font_size=font_size_class1 if ann_class_id == 1 else font_size_0_2,
-                    font_path=current_font_path
+                    font_path=current_font_path,
+                    debug=debug
                 )
                 # Calculate random offset based on class ID
                 def get_offset(box_dim, percentage):
@@ -381,7 +435,7 @@ def _calculate_text_layout(
     conceptual_box_h = random.randint(min_text_box_height, max_height_for_text_area)
     max_placement_box = (conceptual_box_w, conceptual_box_h)
 
-    actual_text_box_size = BoundingBoxCalculator.fit(text, max_placement_box, font_size=font_size, font_path=font_path)
+    actual_text_box_size = BoundingBoxCalculator.fit(text, max_placement_box, font_size=font_size, font_path=font_path, debug=False)
     actual_w, actual_h = actual_text_box_size
 
     if actual_w <= 0 or actual_h <= 0:
@@ -609,24 +663,109 @@ def _prepare_generation_args(args: argparse.Namespace, dataset_info: Dict, label
 def _generate_images_in_parallel(generation_args_tuple: Tuple, no_samples: int) -> List:
     if no_samples <= 0:
         return []
+    
     list_of_generation_args = [generation_args_tuple] * no_samples
     # Ensure os.cpu_count() returns a valid number or default to 1
     num_cpus = os.cpu_count()
-    max_parallel_calls = min(num_cpus if num_cpus else 1, no_samples)
-
+    # Reduce parallel processes to avoid resource conflicts
+    max_parallel_calls = min((num_cpus // 2) if num_cpus and num_cpus > 2 else 1, no_samples, 4)
+    
+    if max_parallel_calls == 0:
+        max_parallel_calls = 1  # Ensure at least one process
+    
+    print(f"Generating {no_samples} images using {max_parallel_calls} parallel processes...")
+    
     results = []
-    # Use try-finally for pool shutdown if issues arise, but starmap should handle clean exit.
-    # Consider reducing max_parallel_calls if memory is an issue for large images/many processes.
-    if max_parallel_calls == 0: max_parallel_calls = 1  # Ensure at least one process
+    pool = None
+    
+    try:
+        # Use spawn method to avoid potential issues with fork on some systems
+        ctx = multiprocessing.get_context('spawn')
+        pool = ctx.Pool(processes=max_parallel_calls)
+        
+        # Add timeout and progress tracking
+        import time
+        start_time = time.time()
+        timeout_seconds = 300  # 5 minutes timeout
+        
+        # Use starmap_async for better control
+        async_result = pool.starmap_async(generate_synthetic_image, list_of_generation_args)
+        
+        # Wait with timeout and progress updates
+        while not async_result.ready():
+            elapsed = time.time() - start_time
+            if elapsed > timeout_seconds:
+                print(f"Timeout after {timeout_seconds} seconds. Terminating processes...")
+                pool.terminate()
+                pool.join()
+                raise TimeoutError(f"Image generation timed out after {timeout_seconds} seconds")
+            
+            # Show progress every 10 seconds
+            if int(elapsed) % 10 == 0 and elapsed > 0:
+                print(f"Still generating... ({elapsed:.0f}s elapsed)")
+            
+            time.sleep(1)
+        
+        results = async_result.get()
+        elapsed = time.time() - start_time
+        print(f"Successfully generated {len(results)} images in {elapsed:.1f} seconds")
+        
+    except Exception as e:
+        print(f"Error during parallel image generation: {e}")
+        if pool:
+            try:
+                pool.terminate()  # Forcefully terminate worker processes
+                pool.join(timeout=10)  # Wait max 10 seconds for cleanup
+            except Exception as cleanup_error:
+                print(f"Error during pool cleanup: {cleanup_error}")
+        
+        # Fallback to sequential processing
+        print("Falling back to sequential processing...")
+        results = _generate_images_sequentially(generation_args_tuple, no_samples)
+        
+    finally:
+        if pool:
+            try:
+                pool.close()
+                pool.join()
+            except Exception:
+                pass  # Ignore cleanup errors
+    
+    return results
 
-    with multiprocessing.Pool(processes=max_parallel_calls) as pool:
+
+def _generate_images_sequentially(generation_args_tuple: Tuple, no_samples: int) -> List:
+    """Fallback sequential image generation when parallel processing fails."""
+    print(f"Generating {no_samples} images sequentially...")
+    results = []
+    start_time = time.time()
+    
+    for i in range(no_samples):
         try:
-            results = pool.starmap(generate_synthetic_image, list_of_generation_args)
+            if i % 10 == 0 and i > 0:
+                elapsed = time.time() - start_time
+                rate = i / elapsed if elapsed > 0 else 0
+                eta = (no_samples - i) / rate if rate > 0 else 0
+                print(f"Generated {i}/{no_samples} images... ({rate:.1f} img/s, ETA: {eta:.0f}s)")
+            
+            img_start = time.time()
+            result = generate_synthetic_image(*generation_args_tuple)
+            img_time = time.time() - img_start
+            
+            if result[0] and result[1]:  # Check if generation was successful
+                results.append(result)
+            else:
+                print(f"Warning: Image {i+1} generation failed (took {img_time:.2f}s)")
+                
         except Exception as e:
-            print(f"Error during parallel image generation: {e}")
-            pool.terminate()  # Forcefully terminate worker processes
-            pool.join()  # Wait for worker processes to exit
-            raise  # Re-raise the exception to make the error visible
+            print(f"Error generating image {i+1}: {e}")
+            if generation_args_tuple[7]:  # debug flag
+                traceback.print_exc()
+            continue
+    
+    elapsed = time.time() - start_time
+    success_rate = len(results) / no_samples * 100 if no_samples > 0 else 0
+    print(f"Sequential generation completed: {len(results)}/{no_samples} images ({success_rate:.1f}% success) in {elapsed:.1f}s")
     return results
 
 
