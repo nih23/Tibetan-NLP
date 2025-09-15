@@ -33,7 +33,29 @@ pip install -r requirements.txt
 
 ```bash
 # 1. Generate dataset
-python generate_training_data.py --train_samples 1000 --val_samples 200 --image_size 1024
+python generate_training_data.py --train_samples 10 --val_samples 10 --font_path_tibetan ext/Microsoft\ Himalaya.ttf --font_path_chinese ext/simkai.ttf
+
+# 1.5 Inspect and validate dataset with Label Studio (optional)
+# Install Label Studio if not already installed:
+# pip install label-studio label-studio-converter
+
+# Set up environment variables for local file serving
+export LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+export LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=$(pwd)/datasets/yolo_tibetan_dataset
+
+# Convert YOLO annotations to Label Studio format
+label-studio-converter import yolo -i datasets/yolo_tibetan_dataset/train -o ls-tasks.json --image-ext ".png" --image-root-url "/data/local-files/?d=train/images"
+
+# Start Label Studio web interface (opens at http://localhost:8080)
+label-studio
+
+# In Label Studio:
+# 1. Create a new project
+# 2. Import the generated ls-tasks.json file
+# 3. Review and validate the generated annotations
+# 4. Export corrections if needed
+
+# See here for more information: https://github.com/HumanSignal/label-studio-sdk/tree/master/src/label_studio_sdk/converter#tutorial-importing-yolo-pre-annotated-images-to-label-studio-using-local-storage
 
 # 2. Train model
 python train_model.py --epochs 100 --export

@@ -4,7 +4,7 @@ Image processing utilities for the TibetanOCR project.
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import io
 from typing import Tuple, List, Union, Dict, Any
 
@@ -217,3 +217,95 @@ def denormalize_box(box: List[float], image_size: Tuple[int, int]) -> Tuple[int,
     y_max = int((y + h/2) * height)
     
     return (x_min, y_min, x_max, y_max)
+
+
+class BoundingBoxCalculator:
+    """
+    Utility class for calculating bounding boxes and font sizes for text rendering.
+    """
+    
+    @staticmethod
+    def fit(text: str, box_size: Tuple[int, int], font_size: int = 24, font_path: str = 'ext/Microsoft Himalaya.ttf') -> Tuple[int, int]:
+        """
+        Calculate the true bounding box size for the specified text when it is wrapped and terminated to fit a given box size.
+
+        Args:
+            text: Text to be measured
+            box_size: Tuple (width, height) specifying the size of the box to fit the text
+            font_size: Size of the font
+            font_path: Path to the font file
+
+        Returns:
+            Tuple (width, height) representing the actual bounding box size of the wrapped and terminated text
+        """
+        # Create a dummy image to get a drawing context
+        dummy_image = Image.new('RGB', (1, 1))
+        draw = ImageDraw.Draw(dummy_image)
+
+        # Define the font
+        try:
+            font = ImageFont.truetype(font_path, font_size)
+        except IOError:
+            font = ImageFont.load_default()
+            print("Warning: Default font used, may not accurately measure text.")
+
+        box_w, box_h = box_size
+        actual_text_width, actual_text_height = 0, 0
+        y_offset = 0
+
+        # Process each line
+        for line in text.split('\n'):
+            while line:
+                # Find the breakpoint for wrapping
+                for i in range(len(line)):
+                    if draw.textlength(line[:i + 1], font=font) > box_w:
+                        break
+                else:
+                    i = len(line)
+
+                # Add the line to wrapped text
+                wrapped_line = line[:i]
+
+                left, top, right, bottom = font.getbbox(wrapped_line)
+                line_width, line_height = right - left, bottom - top
+
+                actual_text_width = max(actual_text_width, line_width)
+                y_offset += line_height
+
+                # Check if the next line exceeds the box height
+                if y_offset > box_h:
+                    y_offset -= line_height  # Remove the last line's height if it exceeds
+                    break
+
+                line = line[i:]
+
+            if y_offset > box_h:
+                break
+
+        return actual_text_width, y_offset + 10
+
+    @staticmethod
+    def find_max_font(text: str, box_size: Tuple[int, int], font_path: str, max_size: int = 100) -> int:
+        """
+        Find maximum font size where text fits in box using binary search.
+        
+        Args:
+            text: Text to fit
+            box_size: Target box size (width, height)
+            font_path: Path to font file
+            max_size: Maximum font size to try
+            
+        Returns:
+            int: Maximum font size that fits
+        """
+        low, high = 1, max_size
+        best = 1
+        while low <= high:
+            mid = (low + high) // 2
+            w, h = BoundingBoxCalculator.fit(text, box_size, mid, font_path)
+            if w <= box_size[0] and h <= box_size[1]:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best
