@@ -9,7 +9,8 @@ This Python project focuses on detecting and recognizing Tibetan text in images.
 3. **Inference**: Detect Tibetan text blocks in new images, including support for Staatsbibliothek zu Berlin digital collections
 4. **OCR**: Apply Tesseract OCR to the detected text blocks to extract the actual text content
 
-![Validation results](res/results_val_1.png)
+## Example of synthetic data
+![generated synthetic data](res/results_val_1.jpg)
 
 ## Quick Start Guide
 
