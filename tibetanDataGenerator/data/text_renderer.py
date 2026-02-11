@@ -1,4 +1,5 @@
 import os
+import time
 from PIL import Image, ImageDraw, ImageFont
 
 from tibetanDataGenerator.data.augmentation import AugmentationStrategy
@@ -46,26 +47,19 @@ class ImageBuilder:
 
         box_x, box_y = position
         box_w, box_h = box_size
+        if box_w <= 0 or box_h <= 0:
+            return self
+        if not text or not str(text).strip():
+            return self
         max_y = box_y + box_h
 
         if rotation == 0:
             # Standard horizontal text rendering
-            wrapped_text = []
-            for line in text.split('\n'):
-                while line:
-                    for i in range(1, len(line) + 1):
-                        if self.draw.textlength(line[:i], font=self.font) > box_w:
-                            break
-                    else:
-                        i = len(line)
-
-                    wrapped_text.append(line[:i])
-                    line = line[i:]
+            wrapped_text = self._wrap_text_lines(self.draw, text, box_w)
 
             y_offset = 0
             for line in wrapped_text:
-                left, top, right, bottom = self.font.getbbox(line)
-                line_height = bottom - top
+                line_height = self._safe_line_height(line)
                 if box_y + y_offset + line_height > max_y:
                     break
                 self.draw.text((box_x, box_y + y_offset), line, font=self.font, fill=(0, 0, 0))
@@ -78,21 +72,11 @@ class ImageBuilder:
             temp_draw = ImageDraw.Draw(temp_img)
             
             # Render text on temporary image
-            wrapped_text = []
-            for line in text.split('\n'):
-                while line:
-                    for i in range(1, len(line) + 1):
-                        if temp_draw.textlength(line[:i], font=self.font) > box_h:
-                            break
-                    else:
-                        i = len(line)
-                    wrapped_text.append(line[:i])
-                    line = line[i:]
+            wrapped_text = self._wrap_text_lines(temp_draw, text, box_h)
             
             y_offset = 0
             for line in wrapped_text:
-                left, top, right, bottom = self.font.getbbox(line)
-                line_height = bottom - top
+                line_height = self._safe_line_height(line)
                 if y_offset + line_height > box_w:
                     break
                 temp_draw.text((0, y_offset), line, font=self.font, fill=(0, 0, 0))
@@ -108,6 +92,82 @@ class ImageBuilder:
             return self.add_text(text, position, box_size, rotation=0)
 
         return self
+
+    def _wrap_text_lines(self, draw_ctx, text, max_width, timeout_seconds=1.5, max_total_lines=300):
+        """
+        Robust text wrapping with hard limits to avoid pathological hangs in PIL font shaping.
+        """
+        start = time.time()
+        wrapped = []
+
+        for raw_line in text.split('\n'):
+            line = raw_line
+            chunk_guard = 0
+            while line and len(wrapped) < max_total_lines:
+                if time.time() - start > timeout_seconds:
+                    # Stop wrapping if it becomes too expensive.
+                    return wrapped
+                if chunk_guard > 10000:
+                    # Safety stop for malformed/unexpected input.
+                    return wrapped
+
+                take = self._max_prefix_that_fits(draw_ctx, line, max_width)
+                if take <= 0:
+                    take = 1
+                wrapped.append(line[:take])
+                line = line[take:]
+                chunk_guard += 1
+
+        return wrapped
+
+    def _max_prefix_that_fits(self, draw_ctx, line, max_width):
+        """
+        Find longest prefix that fits max_width via binary search.
+        This avoids O(n^2) behavior from character-by-character scanning.
+        """
+        if not line:
+            return 0
+
+        lo, hi = 1, len(line)
+        best = 0
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            snippet = line[:mid]
+            width = self._safe_textlength(draw_ctx, snippet)
+            if width <= max_width:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+
+        # Ensure forward progress even if first glyph is wider than max_width.
+        return best if best > 0 else 1
+
+    def _safe_textlength(self, draw_ctx, text):
+        try:
+            return draw_ctx.textlength(text, font=self.font)
+        except Exception:
+            # Fallback heuristic if PIL shaping fails on a specific glyph sequence.
+            return float(len(text) * 10)
+
+    def _safe_line_height(self, line):
+        sample = line if line else "A"
+        try:
+            left, top, right, bottom = self.font.getbbox(sample)
+            h = bottom - top
+            if h > 0:
+                return h
+        except Exception:
+            pass
+
+        try:
+            asc, desc = self.font.getmetrics()
+            if asc + desc > 0:
+                return asc + desc
+        except Exception:
+            pass
+
+        return 16
 
     def add_bounding_box(self, position, size, color=(255, 0, 0)):
         """

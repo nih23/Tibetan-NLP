@@ -184,14 +184,13 @@ def _generate_synthetic_image_impl(
     border_offset_y = int(BORDER_OFFSET_RATIO * image_height)
 
     image_path_bg = _select_random_background(folder_with_background, images)
-    # Determine which font to use based on annotation class
-    current_font_path = font_path_tibetan  # Default to Tibetan font
-    if annotations_file_path:
-        parsed_annotations = _parse_yolo_annotations(annotations_file_path)
-        if parsed_annotations and parsed_annotations[0][0] == 2:  # Check first annotation's class_id
-            current_font_path = font_path_chinese
-
-    builder = _setup_image_builder(image_path_bg, image_width, image_height, current_font_path, 24)  # Default font size only used if no annotations
+    builder = _setup_image_builder(
+        image_path_bg,
+        image_width,
+        image_height,
+        font_path_tibetan,
+        24
+    )  # Font is set per-class below
 
     bbox_str_list = []  # Collect bounding box strings for all text instances
     tibetan_number_match = None  # Store the matching number if we find a Tibetan number file
@@ -215,10 +214,15 @@ def _generate_synthetic_image_impl(
 
             # Draw only if width and height are positive
             if draw_box_size[0] > 0 and draw_box_size[1] > 0:
+                text = ""
+                file_name_from_corpus = ""
+                text_font_path = font_path_tibetan
+                text_font_size = 24
+
                 # Select the text corpus based on ann_class_id
                 if ann_class_id == 0:  # Tibetan numbers
                     text, file_name_from_corpus = _generate_text(corpora_tibetan_numbers_path)
-                    # Calculate font size for class 1 with bounding box constraints
+                    # Calculate font size with bounding box constraints
                     text_for_sizing = text if text else "default"
                     max_font = BoundingBoxCalculator.find_max_font(
                         text_for_sizing,
@@ -227,13 +231,17 @@ def _generate_synthetic_image_impl(
                         max_size=100,
                         debug=debug
                     )
-                    font_size_class1 = random.randint(24, max(24, min(100, max_font)))
-                    
+                    max_font = max(1, min(100, max_font))
+                    min_font = 24 if max_font >= 24 else 1
+                    font_size_class1 = random.randint(min_font, max_font)
+
                     # Set sibling classes to be ±1-2 sizes different
                     delta = random.choice([-2, -1, 1, 2])
                     font_size_0_2 = max(1, min(100, font_size_class1 + delta))
-                    
-                    builder.set_font(font_path_tibetan, font_size_class1)
+
+                    text_font_path = font_path_tibetan
+                    text_font_size = font_size_class1
+                    builder.set_font(text_font_path, text_font_size)
                     # Extract the number part from the Tibetan filename
                     try:
                         tibetan_number_match = re.search(r'tib_no_(\d+)', file_name_from_corpus)
@@ -243,7 +251,7 @@ def _generate_synthetic_image_impl(
                         tibetan_number_match = None
                 elif ann_class_id == 1:  # Tibetan text
                     text, file_name_from_corpus = _generate_text(corpora_tibetan_text_path)
-                    # Calculate font size for class 1 with bounding box constraints
+                    # Calculate font size with bounding box constraints
                     text_for_sizing = text if text else "default"
                     max_font = BoundingBoxCalculator.find_max_font(
                         text_for_sizing,
@@ -252,16 +260,39 @@ def _generate_synthetic_image_impl(
                         max_size=100,
                         debug=debug
                     )
-                    font_size_class1 = random.randint(24, max(24, min(100, max_font)))
-                    builder.set_font(font_path_tibetan, font_size_class1)
+                    max_font = max(1, min(100, max_font))
+                    min_font = 24 if max_font >= 24 else 1
+                    font_size_class1 = random.randint(min_font, max_font)
+                    text_font_path = font_path_tibetan
+                    text_font_size = font_size_class1
+                    builder.set_font(text_font_path, text_font_size)
                 elif ann_class_id == 2:  # Chinese numbers
                     # Use the same number as Tibetan if available
                     chinese_number = f"chi_no_{tibetan_number_match}" if tibetan_number_match else None
                     text, file_name_from_corpus = _generate_text(corpora_chinese_numbers_path, chinese_number)
-                    builder.set_font(font_path_chinese, font_size_0_2)
+                    text_for_sizing = text if text else "default"
+                    max_font_chinese = BoundingBoxCalculator.find_max_font(
+                        text_for_sizing,
+                        (draw_box_size[0], draw_box_size[1]),
+                        font_path_chinese,
+                        max_size=100,
+                        debug=debug
+                    )
+                    max_font_chinese = max(1, min(100, max_font_chinese))
+                    if font_size_0_2 is None:
+                        text_font_size = max_font_chinese
+                    else:
+                        text_font_size = max(1, min(font_size_0_2, max_font_chinese))
+                    text_font_path = font_path_chinese
+                    builder.set_font(text_font_path, text_font_size)
                 else:
                     if debug:
                         print(f"Debug: Unknown ann_class_id {ann_class_id}. Skipping this annotation box.")
+                    continue
+
+                if not text or not str(text).strip():
+                    if debug:
+                        print(f"Debug: Empty text for class {ann_class_id}. Skipping annotation box.")
                     continue
 
                 # Ensure the text fits within the bounding box
@@ -269,10 +300,18 @@ def _generate_synthetic_image_impl(
                 actual_text_box_size = BoundingBoxCalculator.fit(
                     text,
                     draw_box_size,
-                    font_size=font_size_class1 if ann_class_id == 1 else font_size_0_2,
-                    font_path=current_font_path,
+                    font_size=text_font_size,
+                    font_path=text_font_path,
                     debug=debug
                 )
+                if actual_text_box_size[0] <= 0 or actual_text_box_size[1] <= 0:
+                    if debug:
+                        print(
+                            f"Debug: Invalid fitted text size {actual_text_box_size} for class {ann_class_id}. "
+                            "Skipping annotation box."
+                        )
+                    continue
+
                 # Calculate random offset based on class ID
                 def get_offset(box_dim, percentage):
                     max_offset = box_dim * percentage / 100
@@ -677,6 +716,8 @@ def _generate_images_in_parallel(generation_args_tuple: Tuple, no_samples: int) 
     
     results = []
     pool = None
+    per_sample_timeout_seconds = 45
+    total_timeout_seconds = max(300, no_samples * per_sample_timeout_seconds)
     
     try:
         # Use spawn method to avoid potential issues with fork on some systems
@@ -686,27 +727,46 @@ def _generate_images_in_parallel(generation_args_tuple: Tuple, no_samples: int) 
         # Add timeout and progress tracking
         import time
         start_time = time.time()
-        timeout_seconds = 300  # 5 minutes timeout
         
-        # Use starmap_async for better control
-        async_result = pool.starmap_async(generate_synthetic_image, list_of_generation_args)
+        # Per-sample timeout control:
+        # submit jobs individually and consume with timeout per job.
+        async_jobs = [pool.apply_async(generate_synthetic_image, generation_args_tuple) for _ in range(no_samples)]
+        completed = 0
+        timed_out = False
         
-        # Wait with timeout and progress updates
-        while not async_result.ready():
+        for idx, job in enumerate(async_jobs, start=1):
             elapsed = time.time() - start_time
-            if elapsed > timeout_seconds:
-                print(f"Timeout after {timeout_seconds} seconds. Terminating processes...")
-                pool.terminate()
-                pool.join()
-                raise TimeoutError(f"Image generation timed out after {timeout_seconds} seconds")
-            
-            # Show progress every 10 seconds
-            if int(elapsed) % 10 == 0 and elapsed > 0:
-                print(f"Still generating... ({elapsed:.0f}s elapsed)")
-            
-            time.sleep(1)
-        
-        results = async_result.get()
+            if elapsed > total_timeout_seconds:
+                timed_out = True
+                print(f"Total timeout after {total_timeout_seconds}s. Terminating workers...")
+                break
+
+            try:
+                res = job.get(timeout=per_sample_timeout_seconds)
+                results.append(res)
+                completed += 1
+            except multiprocessing.TimeoutError:
+                timed_out = True
+                print(
+                    f"Per-sample timeout: worker exceeded {per_sample_timeout_seconds}s "
+                    f"on sample {idx}/{no_samples}."
+                )
+                break
+
+            if idx % 10 == 0 or idx == no_samples:
+                now = time.time()
+                run_time = now - start_time
+                rate = completed / run_time if run_time > 0 else 0
+                print(f"Progress: {completed}/{no_samples} generated ({rate:.2f} img/s)")
+
+        if timed_out:
+            pool.terminate()
+            pool.join()
+            raise TimeoutError(
+                f"Parallel generation aborted due to timeout "
+                f"(per-sample={per_sample_timeout_seconds}s, total={total_timeout_seconds}s)."
+            )
+
         elapsed = time.time() - start_time
         print(f"Successfully generated {len(results)} images in {elapsed:.1f} seconds")
         

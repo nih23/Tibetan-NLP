@@ -341,6 +341,21 @@ The UI provides:
 - rendered bounding boxes over the image
 - raw JSON output
 
+## Workbench UI (CLI + Synthetic Data + Preview + Label Studio)
+
+For end-to-end operations via UI (including synthetic generation and label visualization):
+
+```bash
+pip install -r requirements-ui.txt
+python ui_workbench.py
+```
+
+Workbench tabs:
+- `CLI Audit`: reads all major script `-h` outputs
+- `Synthetic Data`: runs `generate_training_data.py` with form-based parameters
+- `Dataset Preview`: renders YOLO boxes over selected dataset images
+- `Label Studio Export`: runs `label-studio-converter import yolo` and can launch Label Studio
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.

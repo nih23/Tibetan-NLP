@@ -170,12 +170,12 @@ def run_inference(
     mineru_timeout: int,
 ):
     if image is None:
-        return None, "Bitte ein Bild hochladen oder per Clipboard einfügen.", "[]"
+        return None, "Please upload an image or paste one from your clipboard.", "[]"
 
     parser_key = _extract_key(parser_choice)
     available, reason = parser_availability(parser_key)
     if not available:
-        return image, f"Backend `{parser_key}` nicht verfügbar: {reason}", "[]"
+        return image, f"Backend `{parser_key}` is not available: {reason}", "[]"
 
     try:
         backend = _build_backend(
@@ -192,11 +192,11 @@ def run_inference(
         result = doc.to_dict()
         detections = result.get("detections", [])
         overlay = _render_overlay(image, detections)
-        status = f"{len(detections)} Bereiche erkannt mit `{parser_key}`."
+        status = f"{len(detections)} regions detected with `{parser_key}`."
         pretty_json = json.dumps(result, ensure_ascii=False, indent=2)
         return overlay, status, pretty_json
     except Exception as exc:
-        return image, f"Fehler: {type(exc).__name__}: {exc}", "[]"
+        return image, f"Error: {type(exc).__name__}: {exc}", "[]"
 
 
 def build_demo() -> gr.Blocks:
@@ -204,8 +204,8 @@ def build_demo() -> gr.Blocks:
     with gr.Blocks(title="PechaBridge Transformer Layout UI") as demo:
         gr.Markdown("# PechaBridge Transformer Layout UI")
         gr.Markdown(
-            "Wähle ein transformerbasiertes Layout/OCR-Modell, passe den Prompt an und füge ein Bild ein. "
-            "Die erkannten Regionen werden als Rahmen gerendert."
+            "Select a transformer-based layout/OCR model, customize the prompt, and paste or upload an image. "
+            "Detected regions are rendered as bounding boxes."
         )
         availability_md = gr.Markdown(_availability_markdown())
 
@@ -224,7 +224,7 @@ def build_demo() -> gr.Blocks:
                 hf_model_id = gr.Textbox(
                     label="HF Model ID Override (optional)",
                     value="",
-                    placeholder="z.B. Qwen/Qwen2.5-VL-7B-Instruct",
+                    placeholder="e.g. Qwen/Qwen2.5-VL-7B-Instruct",
                 )
                 with gr.Row():
                     max_new_tokens = gr.Slider(64, 4096, value=1024, step=32, label="Max New Tokens")
@@ -238,21 +238,21 @@ def build_demo() -> gr.Blocks:
                     value="auto",
                     label="HF DType",
                 )
-                with gr.Accordion("MinerU Optionen", open=False):
+                with gr.Accordion("MinerU Options", open=False):
                     mineru_command = gr.Textbox(label="MinerU Command", value="mineru")
                     mineru_timeout = gr.Number(label="MinerU Timeout (s)", value=300, precision=0)
 
-                run_btn = gr.Button("Layout erkennen", variant="primary")
+                run_btn = gr.Button("Detect Layout", variant="primary")
 
             with gr.Column(scale=1):
                 image_input = gr.Image(
                     type="numpy",
-                    label="Bild (Upload oder Clipboard Paste)",
+                    label="Image (Upload or Clipboard Paste)",
                     sources=["upload", "clipboard"],
                 )
-                image_output = gr.Image(type="numpy", label="Erkannte Bereiche (Overlay)")
+                image_output = gr.Image(type="numpy", label="Detected Regions (Overlay)")
                 status_out = gr.Textbox(label="Status", interactive=False)
-                json_out = gr.Code(label="JSON Ergebnis", language="json")
+                json_out = gr.Code(label="JSON Output", language="json")
 
         run_btn.click(
             fn=run_inference,
@@ -270,7 +270,7 @@ def build_demo() -> gr.Blocks:
             outputs=[image_output, status_out, json_out],
         )
 
-        refresh_btn = gr.Button("Backend Status aktualisieren")
+        refresh_btn = gr.Button("Refresh Backend Status")
         refresh_btn.click(fn=_availability_markdown, inputs=[], outputs=[availability_md])
 
     return demo
