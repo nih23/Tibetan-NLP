@@ -106,6 +106,9 @@ def _list_dataset_names(base_dir: str) -> List[str]:
     for child in sorted([c for c in p.iterdir() if c.is_dir()]):
         if (child / "train").exists() or (child / "val").exists():
             out.append(child.name)
+    # Also include YAML dataset configs created at base level
+    for yml in sorted([c for c in p.iterdir() if c.is_file() and c.suffix.lower() in {".yaml", ".yml"}]):
+        out.append(yml.name)
     return out
 
 
@@ -1555,7 +1558,7 @@ def build_ui() -> gr.Blocks:
                 train_dataset_base = gr.Textbox(label="Datasets Base Directory", value=default_dataset_base)
                 train_scan_btn = gr.Button("Scan Training Datasets")
             train_dataset = gr.Dropdown(
-                label="dataset",
+                label="dataset (name, folder path, or .yaml path)",
                 choices=train_dataset_choices,
                 value=default_train_dataset,
                 allow_custom_value=True,

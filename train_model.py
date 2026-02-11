@@ -80,12 +80,42 @@ def main():
     args = parser.parse_args()
 
     # Path to dataset configuration
-    data_path = Path(DATASETS_DIR) / args.dataset / 'data.yml'
+    script_root = Path(__file__).resolve().parent
+    dataset_arg = Path(str(args.dataset)).expanduser()
+    candidates = []
+
+    # 1) Direct YAML path passed by user/UI.
+    if dataset_arg.suffix.lower() in {".yml", ".yaml"}:
+        candidates.append(dataset_arg)
+    # 2) Direct dataset folder path containing data.yml.
+    candidates.append(dataset_arg / "data.yml")
+    # 3) Project-local relative path.
+    candidates.append(script_root / dataset_arg)
+    # 4) Project-local datasets folder (name or yaml filename).
+    candidates.append(script_root / "datasets" / dataset_arg)
+    if dataset_arg.suffix.lower() not in {".yml", ".yaml"}:
+        candidates.append(script_root / "datasets" / f"{str(args.dataset)}.yaml")
+        candidates.append(script_root / "datasets" / f"{str(args.dataset)}.yml")
+    # 5) Project-local datasets/<name>/data.yml (folder layout).
+    candidates.append(script_root / "datasets" / str(args.dataset) / "data.yml")
+    # 6) Ultralytics global datasets dir (name, yaml, folder/data.yml).
+    if dataset_arg.suffix.lower() in {".yml", ".yaml"}:
+        candidates.append(Path(DATASETS_DIR) / dataset_arg.name)
+    else:
+        candidates.append(Path(DATASETS_DIR) / f"{str(args.dataset)}.yaml")
+        candidates.append(Path(DATASETS_DIR) / f"{str(args.dataset)}.yml")
+    candidates.append(Path(DATASETS_DIR) / str(args.dataset) / "data.yml")
+
+    data_path = next((p.resolve() for p in candidates if p.exists()), None)
     
-    if not data_path.exists():
-        print(f"Fehler: Datensatz-Konfiguration nicht gefunden: {data_path}")
-        print("Bitte generiere zuerst den Datensatz mit generate_training_data.py:")
-        print("python generate_training_data.py --train_samples 1000 --val_samples 200 --image_size 1024")
+    if data_path is None:
+        print(f"Fehler: Datensatz-Konfiguration nicht gefunden fuer --dataset={args.dataset}")
+        print("Erwartet eine der folgenden Eingaben fuer --dataset:")
+        print("  - Datensatzname (z.B. tibetan-yolo)")
+        print("  - Absoluter/relativer Pfad zu einem Datensatzordner mit data.yml")
+        print("  - Absoluter/relativer Pfad direkt auf data.yml")
+        print("Beispiel:")
+        print("python train_model.py --dataset ./datasets/tibetan-yolo --epochs 100")
         return
 
     print(f"Starte Training mit Datensatz: {data_path}")
