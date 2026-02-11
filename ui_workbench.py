@@ -807,6 +807,199 @@ def run_ultralytics_train(
     return f"{status}\nBest model path: {best_model}\n\n{out}", str(best_model)
 
 
+def _build_ultralytics_train_cmd(
+    dataset: str,
+    model: str,
+    epochs: int,
+    batch: int,
+    imgsz: int,
+    workers: int,
+    device: str,
+    project: str,
+    name: str,
+    patience: int,
+    export: bool,
+    wandb_enabled: bool,
+    wandb_project: str,
+    wandb_entity: str,
+    wandb_tags: str,
+    wandb_name: str,
+) -> List[str]:
+    cmd = [
+        sys.executable,
+        "-u",
+        "train_model.py",
+        "--dataset",
+        dataset,
+        "--model",
+        model,
+        "--epochs",
+        str(int(epochs)),
+        "--batch",
+        str(int(batch)),
+        "--imgsz",
+        str(int(imgsz)),
+        "--workers",
+        str(int(workers)),
+        "--device",
+        (device or "").strip(),
+        "--project",
+        project,
+        "--name",
+        name,
+        "--patience",
+        str(int(patience)),
+    ]
+    if export:
+        cmd.append("--export")
+    if wandb_enabled:
+        cmd.append("--wandb")
+        if wandb_project.strip():
+            cmd.extend(["--wandb-project", wandb_project.strip()])
+        if wandb_entity.strip():
+            cmd.extend(["--wandb-entity", wandb_entity.strip()])
+        if wandb_tags.strip():
+            cmd.extend(["--wandb-tags", wandb_tags.strip()])
+        if wandb_name.strip():
+            cmd.extend(["--wandb-name", wandb_name.strip()])
+    return cmd
+
+
+def run_ultralytics_train_live(
+    dataset: str,
+    model: str,
+    epochs: int,
+    batch: int,
+    imgsz: int,
+    workers: int,
+    device: str,
+    project: str,
+    name: str,
+    patience: int,
+    export: bool,
+    wandb_enabled: bool,
+    wandb_project: str,
+    wandb_entity: str,
+    wandb_tags: str,
+    wandb_name: str,
+):
+    cmd = _build_ultralytics_train_cmd(
+        dataset=dataset,
+        model=model,
+        epochs=epochs,
+        batch=batch,
+        imgsz=imgsz,
+        workers=workers,
+        device=device,
+        project=project,
+        name=name,
+        patience=patience,
+        export=export,
+        wandb_enabled=wandb_enabled,
+        wandb_project=wandb_project,
+        wandb_entity=wandb_entity,
+        wandb_tags=wandb_tags,
+        wandb_name=wandb_name,
+    )
+    best_model = Path(project).expanduser().resolve() / name / "weights" / "best.pt"
+
+    try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0,
+        )
+    except Exception as exc:
+        msg = f"Failed\nBest model path: {best_model}\n\n{type(exc).__name__}: {exc}"
+        yield msg, str(best_model)
+        return
+
+    if proc.stdout is not None:
+        try:
+            os.set_blocking(proc.stdout.fileno(), False)
+        except Exception:
+            pass
+
+    log_lines: List[str] = []
+    partial = ""
+    last_emit_ts = 0.0
+    last_emit_count = 0
+    stream_failed = False
+    stream_fail_msg = ""
+
+    yield f"Running ...\nBest model path: {best_model}\n", str(best_model)
+
+    while True:
+        got_output = False
+        if (not stream_failed) and proc.stdout is not None:
+            try:
+                chunk = proc.stdout.read()
+            except BlockingIOError:
+                chunk = b""
+            except Exception as exc:
+                stream_failed = True
+                stream_fail_msg = f"stdout stream disabled ({type(exc).__name__}: {exc})"
+                chunk = b""
+
+            if chunk:
+                got_output = True
+                if isinstance(chunk, bytes):
+                    chunk_text = chunk.decode("utf-8", errors="replace")
+                else:
+                    chunk_text = str(chunk)
+                chunk_text = chunk_text.replace("\r", "\n")
+                partial += chunk_text
+                parts = partial.splitlines(keepends=True)
+                keep = ""
+                for piece in parts:
+                    if piece.endswith("\n"):
+                        log_lines.append(piece.rstrip("\n"))
+                    else:
+                        keep = piece
+                partial = keep
+
+        now = time.time()
+        should_emit = (now - last_emit_ts >= 0.25) or (len(log_lines) != last_emit_count)
+        if should_emit:
+            tail = "\n".join(log_lines[-1200:])
+            if stream_failed and stream_fail_msg:
+                tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
+            running_msg = f"Running ...\nBest model path: {best_model}\n\n{tail}"
+            yield running_msg, str(best_model)
+            last_emit_ts = now
+            last_emit_count = len(log_lines)
+
+        if proc.poll() is not None:
+            break
+
+        if not got_output:
+            time.sleep(0.15)
+
+    if proc.stdout is not None:
+        try:
+            rest = proc.stdout.read()
+        except Exception:
+            rest = b""
+        if rest:
+            if isinstance(rest, bytes):
+                partial += rest.decode("utf-8", errors="replace").replace("\r", "\n")
+            else:
+                partial += str(rest).replace("\r", "\n")
+        if partial:
+            log_lines.extend(partial.splitlines())
+
+    ok = proc.returncode == 0
+    status = "Success" if ok else "Failed"
+    final_msg = f"{status}\nBest model path: {best_model}\n\n" + "\n".join(log_lines[-3000:])
+    yield final_msg, str(best_model)
+
+
 def _ultralytics_model_presets() -> List[str]:
     return [
         "yolov8n.pt",
@@ -855,7 +1048,7 @@ def run_ultralytics_train_from_ui(
     wandb_name: str,
 ):
     model = resolve_train_model(model_choice, model_override)
-    return run_ultralytics_train(
+    return run_ultralytics_train_live(
         dataset=dataset,
         model=model,
         epochs=epochs,
