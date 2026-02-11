@@ -242,10 +242,37 @@ python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best
 
 ### 4. OCR on Detected Text Blocks
 
-The OCR script applies Tesseract OCR to text blocks detected by the YOLO model:
+The OCR script supports multiple parser backends:
+- `legacy`: YOLO + Tesseract
+- `mineru25`: MinerU2.5 (modern layout+OCR parser, via MinerU CLI)
+- `paddleocr_vl`: PaddleOCR-VL via Hugging Face Transformers
+- `qwen25vl`: Qwen2.5-VL via Hugging Face Transformers
+- `granite_docling`: Granite-Docling-258M via Hugging Face Transformers
+
+List parser backends and availability:
 
 ```bash
-python ocr_on_detections.py --source image.jpg --model runs/detect/train/weights/best.pt --lang bod
+python ocr_on_detections.py --list-parsers
+```
+
+Legacy OCR example:
+
+```bash
+python ocr_on_detections.py --source image.jpg --parser legacy --model runs/detect/train/weights/best.pt --lang bod
+```
+
+MinerU2.5 example:
+
+```bash
+python ocr_on_detections.py --source image.jpg --parser mineru25 --mineru-command mineru
+```
+
+Transformer VLM examples:
+
+```bash
+python ocr_on_detections.py --source image.jpg --parser paddleocr_vl
+python ocr_on_detections.py --source image.jpg --parser qwen25vl
+python ocr_on_detections.py --source image.jpg --parser granite_docling
 ```
 
 #### OCR Arguments
@@ -254,9 +281,18 @@ python ocr_on_detections.py --source image.jpg --model runs/detect/train/weights
 |----------|-------------|---------|
 | `--source` | Path to image or directory | required (if no --ppn) |
 | `--ppn` | PPN for Staatsbibliothek zu Berlin data | required (if no --source) |
-| `--model` | Path to the trained model | required |
+| `--parser` | OCR/layout backend (`legacy`, `mineru25`, `paddleocr_vl`, `qwen25vl`, `granite_docling`) | 'legacy' |
+| `--model` | Path to YOLO model (required for `legacy`) | 'yolov8n.pt' |
 | `--lang` | Language for Tesseract OCR | 'eng+deu' |
 | `--tesseract-config` | Additional Tesseract configuration | '' |
+| `--mineru-command` | MinerU CLI command/path (for `mineru25`) | 'mineru' |
+| `--mineru-timeout` | Timeout for MinerU CLI in seconds | 300 |
+| `--hf-model-id` | Override Hugging Face model ID for transformer backends | '' |
+| `--vlm-prompt` | Custom extraction prompt for transformer backends | '' |
+| `--vlm-max-new-tokens` | Max generation tokens for transformer backends | 1024 |
+| `--hf-device` | HF device mode (`auto`, `cpu`, `cuda`, ...) | 'auto' |
+| `--hf-dtype` | HF torch dtype (`auto`, `float16`, `bfloat16`, ...) | 'auto' |
+| `--list-parsers` | Print parser availability and exit | flag |
 | `--save-crops` | Save cropped text blocks as images | flag |
 | `--output` | Directory for saving results | 'ocr_results' |
 | `--no-ssl-verify` | Disable SSL certificate verification | flag |
@@ -288,6 +324,22 @@ The script generates a JSON file for each processed image with the following str
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+## Transformer Layout UI
+
+For interactive testing of transformer-based layout/OCR backends, use:
+
+```bash
+pip install -r requirements-ui.txt
+python ui_transformer_layout.py
+```
+
+The UI provides:
+- parser selection (`paddleocr_vl`, `qwen25vl`, `granite_docling`, `mineru25`)
+- editable prompt input (pre-filled with default prompt)
+- image upload or clipboard paste
+- rendered bounding boxes over the image
+- raw JSON output
 
 ## License
 
