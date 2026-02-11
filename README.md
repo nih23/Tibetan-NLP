@@ -1,361 +1,55 @@
-# Tibetan OCR Tools
+# PechaBridge Workbench
 
-## Overview
+PechaBridge is intended to be used via the **Workbench UI**.
 
-This Python project focuses on detecting and recognizing Tibetan text in images. It provides a complete pipeline from dataset generation to OCR:
-
-1. **Dataset Generation**: Create synthetic training data by embedding Tibetan text into background images
-2. **Model Training**: Train a YOLO-based object detection model with optional Weights & Biases logging
-3. **Inference**: Detect Tibetan text blocks in new images, including support for Staatsbibliothek zu Berlin digital collections
-4. **OCR**: Apply Tesseract OCR to the detected text blocks to extract the actual text content
-
-## Example of synthetic data
-![generated synthetic data](res/results_val_1.jpg)
-
-## Quick Start Guide
-
-### Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/CodexAITeam/PechaBridge
-cd PechaBridge
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Install Tesseract OCR (required for text recognition)
-# Ubuntu/Debian: sudo apt-get install tesseract-ocr
-# macOS: brew install tesseract
-# Windows: Download installer from https://github.com/UB-Mannheim/tesseract/wiki
-```
-
-### Complete Workflow
-
-```bash
-# 1. Generate dataset
-python generate_training_data.py --train_samples 10 --val_samples 10 --font_path_tibetan ext/Microsoft\ Himalaya.ttf --font_path_chinese ext/simkai.ttf --dataset_name tibetan-yolo
-
-# 1.5 Inspect and validate dataset with Label Studio (optional)
-# Install Label Studio if not already installed:
-# pip install label-studio label-studio-converter
-
-# Set up environment variables for local file serving
-export LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
-export LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=$(pwd)/datasets/tibetan-yolo
-
-# Create classes.txt for Label studio compatibility
-echo "tibetan_no\ntext_body\nchinese_no" > datasets/tibetan-yolo/train/classes.txt
-echo "tibetan_no\ntext_body\nchinese_no" > datasets/tibetan-yolo/val/classes.txt
-
-# Convert YOLO annotations to Label Studio format
-label-studio-converter import yolo -i datasets/tibetan-yolo/train -o ls-tasks.json --image-ext ".png" --image-root-url "/data/local-files/?d=train/images"
-
-# Start Label Studio web interface (opens at http://localhost:8080)
-label-studio
-
-# In Label Studio:
-# 1. Create a new project:
-# 1.1 Go to the project settings and select Cloud Storage.
-# 1.2 Click Add Source Storage and select Local files from the Storage Type options.
-# 1.3 Set the Absolute local path to `$(pwd)/datasets/tibetan-yolo` (You need to resolv `$(pwd)`)
-# 1.4 Click Add storage.
-# 2. Import the generated ls-tasks.json file
-# 3. Review and validate the generated annotations
-# 4. Export corrections if needed
-
-# [1] https://github.com/HumanSignal/label-studio-sdk/tree/master/src/label_studio_sdk/converter#tutorial-importing-yolo-pre-annotated-images-to-label-studio-using-local-storage
-
-# 2. Train model
-python train_model.py --epochs 100 --export
-
-# 3. Run inference (object detection only)
-# On local images:
-yolo predict task=detect model=runs/detect/train/weights/best.torchscript imgsz=1024 source=data/my_inference_data/*.jpg
-
-# On Staatsbibliothek zu Berlin data:
-python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript
-
-# 4. Run OCR on detected text blocks
-# On local images:
-python ocr_on_detections.py --source data/my_inference_data/*.jpg --model runs/detect/train/weights/best.torchscript --lang bod
-
-# On Staatsbibliothek zu Berlin data:
-python ocr_on_detections.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript --lang bod
-```
-
-## Features
-
-- **Automated Dataset Generation**: Create training and validation datasets for Tibetan text detection
-- **Customizable Parameters**: Configure background images, corpora, font, image size, and more
-- **Text Generation Options**: Use synthetic Tibetan text or existing corpora
-- **Advanced Image Processing**: Apply rotation and noise augmentation strategies
-- **Multiprocessing Support**: Leverage parallel processing for efficient dataset generation
-- **Experiment Tracking**: Integration with Weights & Biases for monitoring training progress
-- **Specialized Inference**: Support for Staatsbibliothek zu Berlin digital collections
-- **OCR Integration**: Extract text from detected text blocks using Tesseract OCR
-
-## Code Structure
-
-The project has been refactored to improve modularity and reduce redundancy:
-
-### Core Scripts
-
-- **generate_training_data.py**: Creates synthetic training data
-- **train_model.py**: Trains the YOLO model with optional W&B logging
-- **inference_sbb.py**: Performs inference on Staatsbibliothek zu Berlin data
-- **ocr_on_detections.py**: Applies OCR to detected text blocks
-
-### Utility Library
-
-The `tibetan_utils` package contains shared functionality used across the project:
-
-- **tibetan_utils.config**: Configuration constants and settings
-- **tibetan_utils.arg_utils**: Command-line argument parsing utilities
-- **tibetan_utils.io_utils**: File and directory operations
-- **tibetan_utils.image_utils**: Image processing functions
-- **tibetan_utils.model_utils**: Model loading, training, and inference
-- **tibetan_utils.ocr_utils**: OCR processing utilities
-- **tibetan_utils.sbb_utils**: Staatsbibliothek zu Berlin API integration
-
-## Detailed Documentation
-
-### 1. Dataset Generation
-
-The dataset generation script creates synthetic training data by embedding Tibetan text into background images.
-
-```bash
-python generate_training_data.py --train_samples 1000 --val_samples 200 --augmentation rotate
-```
-
-#### Dataset Generation Arguments
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--background_train` | Folder with background images for training | './data/background_images_train/' |
-| `--background_val` | Folder with background images for validation | './data/background_images_val/' |
-| `--dataset_name` | Folder for the generated YOLO dataset | 'yolo_tibetan/' |
-| `--corpora_folder` | Folder with Tibetan corpora | './data/corpora/Tibetan Number Words/' |
-| `--train_samples` | Number of training samples to generate | 100 |
-| `--val_samples` | Number of validation samples to generate | 100 |
-| `--no_cols` | Number of text columns to generate [1-5] | 1 |
-| `--font_path` | Path to a Tibetan font file | 'ext/Microsoft Himalaya.ttf' |
-| `--single_label` | Use a single label "tibetan" for all files | flag |
-| `--debug` | Enable debug mode for verbose output | flag |
-| `--image_size` | Size of generated images in pixels | 1024 |
-| `--augmentation` | Type of augmentation to apply ['rotate', 'noise'] | 'noise' |
-
-### 2. Model Training
-
-After generating the dataset, you can train a YOLO model using our dedicated training script.
-
-```bash
-python train_model.py --epochs 100 --imgsz 1024 --export
-```
-
-#### Training Arguments
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--dataset` | Name of the dataset folder | 'yolo_tibetan/' |
-| `--model` | Path to the base model | 'yolov8n.pt' |
-| `--epochs` | Number of training epochs | 100 |
-| `--batch` | Batch size for training | 16 |
-| `--imgsz` | Image size for training | 1024 |
-| `--workers` | Number of workers for data loading | 8 |
-| `--device` | Device for training (e.g., cpu, 0, 0,1,2,3) | '' |
-| `--project` | Project name for output | 'runs/detect' |
-| `--name` | Experiment name | 'train' |
-| `--export` | Export the model after training as TorchScript | flag |
-| `--patience` | EarlyStopping patience in epochs | 50 |
-
-#### Weights & Biases Integration
-
-The training script includes integration with [Weights & Biases](https://wandb.ai/) for experiment tracking and visualization.
-
-```bash
-python train_model.py --epochs 100 --wandb --wandb-project TibetanOCR
-```
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--wandb` | Enable Weights & Biases logging | flag |
-| `--wandb-project` | W&B project name | 'TibetanOCR' |
-| `--wandb-entity` | W&B entity (team or username) | None |
-| `--wandb-tags` | Comma-separated tags for the experiment | None |
-| `--wandb-name` | Name of the experiment in wandb | same as --name |
-
-When wandb logging is enabled, the script will:
-- Log training metrics (loss, mAP, precision, recall, etc.)
-- Upload dataset samples for visualization
-- Save model checkpoints as artifacts
-- Generate plots and confusion matrices
-
-#### Alternative: Ultralytics CLI
-
-You can also use the Ultralytics CLI directly:
-
-```bash
-# Train the model
-yolo detect train data=yolo_tibetan/data.yml epochs=100 imgsz=1024 model=yolov8n.pt
-
-# Export the model
-yolo detect export model=runs/detect/train/weights/best.pt 
-```
-
-### 3. Inference
-
-#### Standard Inference
-
-For inference on local image files:
-
-```bash
-yolo predict task=detect model=runs/detect/train/weights/best.torchscript imgsz=1024 source=data/my_inference_data/*.jpg
-```
-
-The results are saved to folder `runs/detect/predict`
-
-#### Inference on Staatsbibliothek zu Berlin Data
-
-For inference on documents from the Staatsbibliothek zu Berlin, use our specialized script:
-
-```bash
-python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript
-```
-
-If you encounter SSL certificate issues, you can use the `--no-ssl-verify` option:
-
-```bash
-python inference_sbb.py --ppn PPN12345678 --model runs/detect/train/weights/best.torchscript --no-ssl-verify
-```
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--ppn` | PPN (Pica Production Number) of the document | required |
-| `--model` | Path to the trained model | required |
-| `--imgsz` | Image size for inference | 1024 |
-| `--conf` | Confidence threshold for detections | 0.25 |
-| `--download` | Download images instead of processing them directly | flag |
-| `--output` | Directory for saving downloaded images | 'sbb_images' |
-| `--max-images` | Maximum number of images for inference (0 = all) | 0 |
-| `--no-ssl-verify` | Disable SSL certificate verification | flag |
-
-### 4. OCR on Detected Text Blocks
-
-The OCR script supports multiple parser backends:
-- `legacy`: YOLO + Tesseract
-- `mineru25`: MinerU2.5 (modern layout+OCR parser, via MinerU CLI)
-- `paddleocr_vl`: PaddleOCR-VL via Hugging Face Transformers
-- `qwen25vl`: Qwen2.5-VL via Hugging Face Transformers
-- `granite_docling`: Granite-Docling-258M via Hugging Face Transformers
-
-List parser backends and availability:
-
-```bash
-python ocr_on_detections.py --list-parsers
-```
-
-Legacy OCR example:
-
-```bash
-python ocr_on_detections.py --source image.jpg --parser legacy --model runs/detect/train/weights/best.pt --lang bod
-```
-
-MinerU2.5 example:
-
-```bash
-python ocr_on_detections.py --source image.jpg --parser mineru25 --mineru-command mineru
-```
-
-Transformer VLM examples:
-
-```bash
-python ocr_on_detections.py --source image.jpg --parser paddleocr_vl
-python ocr_on_detections.py --source image.jpg --parser qwen25vl
-python ocr_on_detections.py --source image.jpg --parser granite_docling
-```
-
-#### OCR Arguments
-
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--source` | Path to image or directory | required (if no --ppn) |
-| `--ppn` | PPN for Staatsbibliothek zu Berlin data | required (if no --source) |
-| `--parser` | OCR/layout backend (`legacy`, `mineru25`, `paddleocr_vl`, `qwen25vl`, `granite_docling`) | 'legacy' |
-| `--model` | Path to YOLO model (required for `legacy`) | 'yolov8n.pt' |
-| `--lang` | Language for Tesseract OCR | 'eng+deu' |
-| `--tesseract-config` | Additional Tesseract configuration | '' |
-| `--mineru-command` | MinerU CLI command/path (for `mineru25`) | 'mineru' |
-| `--mineru-timeout` | Timeout for MinerU CLI in seconds | 300 |
-| `--hf-model-id` | Override Hugging Face model ID for transformer backends | '' |
-| `--vlm-prompt` | Custom extraction prompt for transformer backends | '' |
-| `--vlm-max-new-tokens` | Max generation tokens for transformer backends | 1024 |
-| `--hf-device` | HF device mode (`auto`, `cpu`, `cuda`, ...) | 'auto' |
-| `--hf-dtype` | HF torch dtype (`auto`, `float16`, `bfloat16`, ...) | 'auto' |
-| `--list-parsers` | Print parser availability and exit | flag |
-| `--save-crops` | Save cropped text blocks as images | flag |
-| `--output` | Directory for saving results | 'ocr_results' |
-| `--no-ssl-verify` | Disable SSL certificate verification | flag |
-
-#### OCR Output Format
-
-The script generates a JSON file for each processed image with the following structure:
-
-```json
-{
-  "image_name": "example.jpg",
-  "detections": [
-    {
-      "id": 0,
-      "box": {
-        "x": 0.5,
-        "y": 0.3,
-        "width": 0.2,
-        "height": 0.1
-      },
-      "confidence": 0.95,
-      "class": 0,
-      "text": "Recognized Tibetan text from this block"
-    }
-  ]
-}
-```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## Transformer Layout UI
-
-For interactive testing of transformer-based layout/OCR backends, use:
+## Install
 
 ```bash
 pip install -r requirements-ui.txt
-python ui_transformer_layout.py
 ```
 
-The UI provides:
-- parser selection (`paddleocr_vl`, `qwen25vl`, `granite_docling`, `mineru25`)
-- editable prompt input (pre-filled with default prompt)
-- image upload or clipboard paste
-- rendered bounding boxes over the image
-- raw JSON output
-
-## Workbench UI (CLI + Synthetic Data + Preview + Label Studio)
-
-For end-to-end operations via UI (including synthetic generation and label visualization):
+If you want transformer/VLM features in the Workbench (`Batch VLM Layout (SBB)` and `VLM Layout` tabs), also install:
 
 ```bash
-pip install -r requirements-ui.txt
+pip install -r requirements-vlm.txt
+```
+
+## Start the Workbench
+
+```bash
 python ui_workbench.py
 ```
 
-Workbench tabs:
-- `CLI Audit`: reads all major script `-h` outputs
-- `Synthetic Data`: runs `generate_training_data.py` with form-based parameters
-- `Dataset Preview`: renders YOLO boxes over selected dataset images
-- `Label Studio Export`: runs `label-studio-converter import yolo` and can launch Label Studio
+## Recommended Workflow (UI only)
+
+1. `Synthetic Data`: generate synthetic YOLO datasets.
+2. `Batch VLM Layout (SBB)`: run VLM-based layout on SBB PPN pages (test-only), combine with synthetic data, export.
+3. `Dataset Preview`: inspect images and label boxes.
+4. `Ultralytics Training`: train detection models.
+5. `Model Inference`: run trained model inference.
+6. `VLM Layout`: single-image VLM layout parsing.
+7. `Label Studio Export`: convert YOLO splits to Label Studio tasks and optionally launch Label Studio.
+8. `PPN Downloader`: download and inspect SBB pages.
+9. `CLI Audit`: view script options.
+
+## Label Studio Notes
+
+For local file serving in Label Studio, set:
+
+```bash
+export LABEL_STUDIO_LOCAL_FILES_SERVING_ENABLED=true
+export LABEL_STUDIO_LOCAL_FILES_DOCUMENT_ROOT=/absolute/path/to/your/dataset/root
+```
+
+Then use the Workbench export actions.
+
+## CLI Documentation
+
+CLI usage is documented separately in:
+
+- [README_CLI.md](README_CLI.md)
+- [README_PSEUDO_LABELING_LABEL_STUDIO.md](README_PSEUDO_LABELING_LABEL_STUDIO.md)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT, see [LICENSE](LICENSE).

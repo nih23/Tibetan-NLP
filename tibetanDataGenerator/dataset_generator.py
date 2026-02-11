@@ -342,6 +342,31 @@ def _generate_synthetic_image_impl(
                 # Apply rotation for Tibetan numbers (class 0)
                 rotation_angle = 90 if ann_class_id == 0 else 0
                 builder.add_text(text, text_render_top_left_pos, actual_text_box_size, rotation=rotation_angle)
+                if not builder.last_text_drawn():
+                    if debug:
+                        print(
+                            f"Debug: No text was rendered for class {ann_class_id}. "
+                            "Skipping bbox to avoid empty annotations."
+                        )
+                    continue
+                rendered_bbox = builder.last_text_bbox()
+                if not rendered_bbox:
+                    if debug:
+                        print(
+                            f"Debug: Missing rendered bbox for class {ann_class_id}. "
+                            "Skipping annotation."
+                        )
+                    continue
+                rb_x, rb_y, rb_w, rb_h = rendered_bbox
+                if rb_w <= 0 or rb_h <= 0:
+                    if debug:
+                        print(
+                            f"Debug: Invalid rendered bbox {rendered_bbox} for class {ann_class_id}. "
+                            "Skipping annotation."
+                        )
+                    continue
+                yolo_box_center_pos = (int(round(rb_x + rb_w / 2)), int(round(rb_y + rb_h / 2)))
+                actual_text_box_size = (int(rb_w), int(rb_h))
                 # Get the base filename without extension
                 label_key = os.path.splitext(file_name_from_corpus)[0]
 

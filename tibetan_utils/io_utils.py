@@ -38,12 +38,14 @@ def extract_filename(path_or_url: str, with_extension: bool = True) -> str:
         str: Extracted filename
     """
     # Extract PPN pattern from SBB URLs
-    ppn_match = re.search(r'PPN(\d{10})-(\d{8})', path_or_url)
+    ppn_match = re.search(r'PPN([0-9Xx]{10})-(\d{8})', path_or_url)
     if ppn_match:
+        ppn = ppn_match.group(1).upper()
+        page = ppn_match.group(2)
         if with_extension:
-            return f"PPN{ppn_match.group(1)}-{ppn_match.group(2)}.jpg"
+            return f"PPN{ppn}-{page}.jpg"
         else:
-            return f"PPN{ppn_match.group(1)}-{ppn_match.group(2)}"
+            return f"PPN{ppn}-{page}"
     
     # Extract filename from path
     filename = os.path.basename(path_or_url)
