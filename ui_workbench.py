@@ -1048,7 +1048,7 @@ def run_ultralytics_train_from_ui(
     wandb_name: str,
 ):
     model = resolve_train_model(model_choice, model_override)
-    return run_ultralytics_train_live(
+    yield from run_ultralytics_train_live(
         dataset=dataset,
         model=model,
         epochs=epochs,
