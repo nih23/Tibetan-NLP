@@ -703,6 +703,12 @@ def _render_detected_regions(image: np.ndarray, detections: List[Dict[str, Any]]
     return np.array(base)
 
 
+def _tail_lines_newest_first(lines: List[str], limit: int) -> str:
+    if not lines:
+        return ""
+    return "\n".join(reversed(lines[-limit:]))
+
+
 def run_vlm_layout_inference(
     image: np.ndarray,
     parser_choice: str,
@@ -965,9 +971,10 @@ def run_ultralytics_train_live(
                 partial = keep
 
         now = time.time()
-        should_emit = (now - last_emit_ts >= 0.25) or (len(log_lines) != last_emit_count)
+        # Emit in calmer batches to avoid aggressive UI re-renders/jumping.
+        should_emit = (now - last_emit_ts >= 1.5)
         if should_emit:
-            tail = "\n".join(log_lines[-1200:])
+            tail = _tail_lines_newest_first(log_lines, 800)
             if stream_failed and stream_fail_msg:
                 tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
             running_msg = f"Running ...\nBest model path: {best_model}\n\n{tail}"
@@ -996,17 +1003,17 @@ def run_ultralytics_train_live(
 
     ok = proc.returncode == 0
     status = "Success" if ok else "Failed"
-    final_msg = f"{status}\nBest model path: {best_model}\n\n" + "\n".join(log_lines[-3000:])
+    final_msg = f"{status}\nBest model path: {best_model}\n\n" + _tail_lines_newest_first(log_lines, 3000)
     yield final_msg, str(best_model)
 
 
 def _ultralytics_model_presets() -> List[str]:
     return [
-        "yolov8n.pt",
-        "yolov8s.pt",
-        "yolov8m.pt",
-        "yolov8l.pt",
-        "yolov8x.pt",
+        "yolo26n.pt",
+        "yolo26s.pt",
+        "yolo26m.pt",
+        "yolo26l.pt",
+        "yolo26x.pt",
     ]
 
 
@@ -1779,7 +1786,7 @@ def build_ui() -> gr.Blocks:
                     train_imgsz = gr.Number(label="imgsz", value=1024, precision=0)
                 with gr.Column():
                     train_workers = gr.Number(label="workers", value=8, precision=0)
-                    train_device = gr.Textbox(label="device", value="")
+                    train_device = gr.Textbox(label="device", value="cuda:0")
                     train_project = gr.Textbox(label="project", value="runs/detect")
                     train_name = gr.Textbox(label="name", value="train-ui")
                     train_patience = gr.Number(label="patience", value=50, precision=0)
