@@ -189,7 +189,21 @@ def _map_detection_class(det: Dict[str, Any]) -> int:
 
 
 def _draw_yolo_boxes(image_path: Path, label_path: Path) -> Tuple[np.ndarray, str]:
-    img = Image.open(image_path).convert("RGB")
+    # File may still be in-flight during live generation; retry briefly.
+    last_err: Optional[Exception] = None
+    img = None
+    for _ in range(3):
+        try:
+            with Image.open(image_path) as im:
+                img = im.convert("RGB")
+            break
+        except OSError as exc:
+            last_err = exc
+            time.sleep(0.08)
+
+    if img is None:
+        raise OSError(f"Could not open image {image_path}: {last_err}")
+
     w, h = img.size
     draw = ImageDraw.Draw(img)
     labels = _read_yolo_labels(label_path)
@@ -283,9 +297,7 @@ def run_generate_synthetic(
 def _latest_generated_sample(dataset_dir: str) -> Tuple[Optional[np.ndarray], str]:
     dataset = Path(dataset_dir).expanduser().resolve()
     exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
-    best: Optional[Path] = None
-    best_split = ""
-    best_mtime = -1.0
+    candidates: List[Tuple[float, str, Path]] = []
 
     for split in ("train", "val"):
         split_images = dataset / split / "images"
@@ -298,18 +310,22 @@ def _latest_generated_sample(dataset_dir: str) -> Tuple[Optional[np.ndarray], st
                 mt = p.stat().st_mtime
             except Exception:
                 continue
-            if mt > best_mtime:
-                best_mtime = mt
-                best = p
-                best_split = split
+            candidates.append((mt, split, p))
 
-    if best is None:
+    if not candidates:
         return None, f"Waiting for generated images in {dataset} ..."
 
-    label_path = dataset / best_split / "labels" / f"{best.stem}.txt"
-    rendered, summary = _draw_yolo_boxes(best, label_path)
-    head = f"Latest sample: {best_split}/images/{best.name}"
-    return rendered, f"{head}\n{summary}"
+    # Try newest first; if the newest file is still being written, fall back.
+    for _, split, image_path in sorted(candidates, key=lambda x: x[0], reverse=True):
+        label_path = dataset / split / "labels" / f"{image_path.stem}.txt"
+        try:
+            rendered, summary = _draw_yolo_boxes(image_path, label_path)
+            head = f"Latest sample: {split}/images/{image_path.name}"
+            return rendered, f"{head}\n{summary}"
+        except OSError:
+            continue
+
+    return None, f"Waiting for stable image write in {dataset} ..."
 
 
 def run_generate_synthetic_live(
