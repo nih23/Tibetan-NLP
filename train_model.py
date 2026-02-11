@@ -106,7 +106,20 @@ def main():
         candidates.append(Path(DATASETS_DIR) / f"{str(args.dataset)}.yml")
     candidates.append(Path(DATASETS_DIR) / str(args.dataset) / "data.yml")
 
-    data_path = next((p.resolve() for p in candidates if p.exists()), None)
+    resolved_candidates = []
+    for p in candidates:
+        p = p.resolve()
+        if p.is_file() and p.suffix.lower() in {".yml", ".yaml"}:
+            resolved_candidates.append(p)
+        elif p.is_dir():
+            yml = p / "data.yml"
+            yaml_alt = p / "data.yaml"
+            if yml.exists():
+                resolved_candidates.append(yml.resolve())
+            elif yaml_alt.exists():
+                resolved_candidates.append(yaml_alt.resolve())
+
+    data_path = resolved_candidates[0] if resolved_candidates else None
     
     if data_path is None:
         print(f"Fehler: Datensatz-Konfiguration nicht gefunden fuer --dataset={args.dataset}")
@@ -130,29 +143,20 @@ def main():
     model = ModelManager.load_model(args.model)
 
     # Start training
-    train_args = {
-        'data': str(data_path),
-        'epochs': args.epochs,
-        'imgsz': args.imgsz,
-        'batch': args.batch,
-        'workers': args.workers,
-        'device': args.device,
-        'project': args.project,
-        'name': args.name,
-        'patience': args.patience,
-        'plots': True,
-        'save_period': 10,
-    }
-    
-    # Add wandb logging if enabled
-    if wandb_enabled:
-        train_args.update({
-            'upload_dataset': True,
-            'logger': 'wandb'
-        })
-    
     # Train model
-    results = ModelManager.train_model(model, **train_args)
+    results = ModelManager.train_model(
+        model,
+        data_path=str(data_path),
+        epochs=args.epochs,
+        image_size=args.imgsz,
+        batch_size=args.batch,
+        workers=args.workers,
+        device=args.device,
+        project=args.project,
+        name=args.name,
+        patience=args.patience,
+        use_wandb=wandb_enabled,
+    )
 
     # Best model path
     best_model_path = Path(args.project) / args.name / 'weights' / 'best.pt'
