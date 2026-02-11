@@ -279,6 +279,7 @@ def create_generate_dataset_parser():
 def create_train_parser():
     """Create parser for model training."""
     parser = argparse.ArgumentParser(description="Train YOLO model for Tibetan text detection")
+    add_model_arguments(parser)
     add_training_arguments(parser)
     add_wandb_arguments(parser)
     return parser
