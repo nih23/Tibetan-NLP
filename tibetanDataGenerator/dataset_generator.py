@@ -84,6 +84,39 @@ def _parse_yolo_annotations(file_path: str) -> List[Tuple[int, float, float, flo
     return annotations
 
 
+def _is_plausible_rendered_bbox(
+        ann_class_id: int,
+        rendered_bbox: Tuple[int, int, int, int],
+        draw_box_size: Tuple[int, int]
+) -> bool:
+    """
+    Reject obviously broken render outputs (e.g. 1-3 px phantom boxes).
+    This is especially important for class 1 (tibetan text body), where
+    a meaningful region should not collapse to tiny dots.
+    """
+    _, _, rb_w, rb_h = rendered_bbox
+    draw_w, draw_h = draw_box_size
+    rb_area = rb_w * rb_h
+    draw_area = max(1, draw_w * draw_h)
+
+    if rb_w <= 0 or rb_h <= 0:
+        return False
+
+    # General lower bound against single-pixel artifacts.
+    if rb_w < 2 or rb_h < 2 or rb_area < 6:
+        return False
+
+    if ann_class_id == 1:
+        # Middle text block should be visually meaningful.
+        if rb_w < 12 or rb_h < 8:
+            return False
+        # Relative bound to catch near-empty renders in large placement boxes.
+        if rb_area < max(96, int(draw_area * 0.01)):
+            return False
+
+    return True
+
+
 def generate_dataset(args: argparse.Namespace, validation: bool = False) -> Dict:
     """
     Generate a dataset for training or validation.
@@ -363,6 +396,13 @@ def _generate_synthetic_image_impl(
                         print(
                             f"Debug: Invalid rendered bbox {rendered_bbox} for class {ann_class_id}. "
                             "Skipping annotation."
+                        )
+                    continue
+                if not _is_plausible_rendered_bbox(ann_class_id, rendered_bbox, draw_box_size):
+                    if debug:
+                        print(
+                            f"Debug: Implausible rendered bbox {rendered_bbox} for class {ann_class_id} "
+                            f"(draw box {draw_box_size}). Skipping annotation."
                         )
                     continue
                 yolo_box_center_pos = (int(round(rb_x + rb_w / 2)), int(round(rb_y + rb_h / 2)))

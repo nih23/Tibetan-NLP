@@ -29,7 +29,16 @@ DEFAULT_PROMPT = (
     "text, label, confidence, and bbox=[x0,y0,x1,y1]."
 )
 
-TRANSFORMER_PARSERS = ["paddleocr_vl", "qwen25vl", "granite_docling", "mineru25"]
+TRANSFORMER_PARSERS = [
+    "paddleocr_vl",
+    "qwen25vl",
+    "granite_docling",
+    "deepseek_ocr",
+    "qwen3_vl",
+    "groundingdino",
+    "florence2",
+    "mineru25",
+]
 
 
 def _format_parser_choices() -> List[str]:

@@ -77,6 +77,7 @@ Transformer parser examples:
 python ocr_on_detections.py --source image.jpg --parser paddleocr_vl
 python ocr_on_detections.py --source image.jpg --parser qwen25vl
 python ocr_on_detections.py --source image.jpg --parser granite_docling
+python ocr_on_detections.py --source image.jpg --parser deepseek_ocr
 ```
 
 ## Label Studio (CLI)

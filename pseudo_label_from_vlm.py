@@ -7,6 +7,10 @@ Supported parser backends:
 - paddleocr_vl
 - qwen25vl
 - granite_docling
+- deepseek_ocr
+- qwen3_vl (layout-only)
+- groundingdino (layout-only)
+- florence2 (layout-only)
 
 Output dataset layout:
   <output_dir>/<split>/images/*.jpg|png
@@ -28,7 +32,16 @@ from PIL import Image
 from tibetan_utils.parsers import create_parser, parser_availability
 
 
-SUPPORTED_PARSERS = ["mineru25", "paddleocr_vl", "qwen25vl", "granite_docling"]
+SUPPORTED_PARSERS = [
+    "mineru25",
+    "paddleocr_vl",
+    "qwen25vl",
+    "granite_docling",
+    "deepseek_ocr",
+    "qwen3_vl",
+    "groundingdino",
+    "florence2",
+]
 CLASS_NAMES = ["tibetan_number_word", "tibetan_text", "chinese_number_word"]
 
 

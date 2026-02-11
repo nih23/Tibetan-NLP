@@ -16,6 +16,7 @@ import os
 import shlex
 import subprocess
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -37,7 +38,16 @@ CLI_SCRIPTS = [
     "run_pseudo_label_workflow.py",
 ]
 
-TRANSFORMER_PARSERS = ["paddleocr_vl", "qwen25vl", "granite_docling", "mineru25"]
+TRANSFORMER_PARSERS = [
+    "paddleocr_vl",
+    "qwen25vl",
+    "granite_docling",
+    "deepseek_ocr",
+    "qwen3_vl",
+    "groundingdino",
+    "florence2",
+    "mineru25",
+]
 
 
 def _run_cmd(cmd: List[str], timeout: int = 3600) -> Tuple[bool, str]:
@@ -270,6 +280,179 @@ def run_generate_synthetic(
     return f"{status}\nDataset path: {dataset_path}\n\n{out}", dataset_path
 
 
+def _latest_generated_sample(dataset_dir: str) -> Tuple[Optional[np.ndarray], str]:
+    dataset = Path(dataset_dir).expanduser().resolve()
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+    best: Optional[Path] = None
+    best_split = ""
+    best_mtime = -1.0
+
+    for split in ("train", "val"):
+        split_images = dataset / split / "images"
+        if not split_images.exists():
+            continue
+        for p in split_images.iterdir():
+            if not p.is_file() or p.suffix.lower() not in exts:
+                continue
+            try:
+                mt = p.stat().st_mtime
+            except Exception:
+                continue
+            if mt > best_mtime:
+                best_mtime = mt
+                best = p
+                best_split = split
+
+    if best is None:
+        return None, f"Waiting for generated images in {dataset} ..."
+
+    label_path = dataset / best_split / "labels" / f"{best.stem}.txt"
+    rendered, summary = _draw_yolo_boxes(best, label_path)
+    head = f"Latest sample: {best_split}/images/{best.name}"
+    return rendered, f"{head}\n{summary}"
+
+
+def run_generate_synthetic_live(
+    background_train: str,
+    background_val: str,
+    output_dir: str,
+    dataset_name: str,
+    corp_tib_num: str,
+    corp_tib_text: str,
+    corp_chi_num: str,
+    train_samples: int,
+    val_samples: int,
+    font_tib: str,
+    font_chi: str,
+    image_width: int,
+    image_height: int,
+    augmentation: str,
+    annotations_file_path: str,
+    single_label: bool,
+    debug: bool,
+):
+    cmd = [
+        sys.executable,
+        "generate_training_data.py",
+        "--background_train",
+        background_train,
+        "--background_val",
+        background_val,
+        "--output_dir",
+        output_dir,
+        "--dataset_name",
+        dataset_name,
+        "--corpora_tibetan_numbers_path",
+        corp_tib_num,
+        "--corpora_tibetan_text_path",
+        corp_tib_text,
+        "--corpora_chinese_numbers_path",
+        corp_chi_num,
+        "--train_samples",
+        str(int(train_samples)),
+        "--val_samples",
+        str(int(val_samples)),
+        "--font_path_tibetan",
+        font_tib,
+        "--font_path_chinese",
+        font_chi,
+        "--image_width",
+        str(int(image_width)),
+        "--image_height",
+        str(int(image_height)),
+        "--augmentation",
+        augmentation,
+    ]
+    if annotations_file_path.strip():
+        cmd.extend(["--annotations_file_path", annotations_file_path.strip()])
+    if single_label:
+        cmd.append("--single_label")
+    if debug:
+        cmd.append("--debug")
+
+    dataset_path = str((Path(output_dir).expanduser().resolve() / dataset_name))
+    log_lines: List[str] = []
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except Exception as exc:
+        msg = f"Failed\nDataset path: {dataset_path}\n\n{type(exc).__name__}: {exc}"
+        preview_img, preview_txt = _latest_generated_sample(dataset_path)
+        yield msg, dataset_path, preview_img, preview_txt
+        return
+
+    if proc.stdout is not None:
+        try:
+            os.set_blocking(proc.stdout.fileno(), False)
+        except Exception:
+            pass
+
+    # Immediate first paint so users see feedback right away.
+    first_img, first_txt = _latest_generated_sample(dataset_path)
+    yield f"Running ...\nDataset path: {dataset_path}\n", dataset_path, first_img, first_txt
+
+    last_preview_ts = 0.0
+    last_emit_log_count = 0
+    partial = ""
+    while True:
+        got_output = False
+        if proc.stdout is not None:
+            try:
+                chunk = proc.stdout.read()
+            except BlockingIOError:
+                chunk = ""
+            if chunk:
+                got_output = True
+                partial += chunk
+                parts = partial.splitlines(keepends=True)
+                keep = ""
+                for piece in parts:
+                    if piece.endswith("\n"):
+                        log_lines.append(piece.rstrip("\n"))
+                    else:
+                        keep = piece
+                partial = keep
+
+        now = time.time()
+        should_emit = (now - last_preview_ts >= 0.25) or (len(log_lines) != last_emit_log_count)
+        if should_emit:
+            preview_img, preview_txt = _latest_generated_sample(dataset_path)
+            tail = "\n".join(log_lines[-400:])
+            running_msg = f"Running ...\nDataset path: {dataset_path}\n\n{tail}"
+            yield running_msg, dataset_path, preview_img, preview_txt
+            last_preview_ts = now
+            last_emit_log_count = len(log_lines)
+
+        if proc.poll() is not None:
+            break
+
+        if not got_output:
+            time.sleep(0.15)
+
+    if proc.stdout is not None:
+        try:
+            rest = proc.stdout.read()
+        except Exception:
+            rest = ""
+        if rest:
+            partial += rest
+        if partial:
+            log_lines.extend(partial.splitlines())
+
+    ok = proc.returncode == 0
+    status = "Success" if ok else "Failed"
+    final_log = f"{status}\nDataset path: {dataset_path}\n\n" + "\n".join(log_lines[-1200:])
+    preview_img, preview_txt = _latest_generated_sample(dataset_path)
+    yield final_log, dataset_path, preview_img, preview_txt
+
+
 def refresh_image_list(dataset_dir: str, split: str):
     split_images = Path(dataset_dir).expanduser().resolve() / split / "images"
     images = _list_images(split_images)
@@ -286,6 +469,23 @@ def preview_sample(dataset_dir: str, split: str, image_name: str):
         return None, f"Image not found: {image_path}"
     rendered, summary = _draw_yolo_boxes(image_path, label_path)
     return rendered, summary
+
+
+def preview_adjacent_sample(dataset_dir: str, split: str, current_image: str, step: int):
+    split_images = Path(dataset_dir).expanduser().resolve() / split / "images"
+    images = _list_images(split_images)
+    if not images:
+        return gr.update(choices=[], value=None), None, "No images found."
+
+    if current_image in images:
+        idx = images.index(current_image)
+    else:
+        idx = 0
+
+    next_idx = (idx + int(step)) % len(images)
+    next_image = images[next_idx]
+    rendered, summary = preview_sample(dataset_dir, split, next_image)
+    return gr.update(choices=images, value=next_image), rendered, summary
 
 
 def export_to_label_studio(
@@ -1109,8 +1309,10 @@ def build_ui() -> gr.Blocks:
             generate_btn = gr.Button("Generate Dataset", variant="primary")
             gen_log = gr.Textbox(label="Generation Log", lines=18)
             generated_dataset_path = gr.Textbox(label="Generated Dataset Path", interactive=False)
+            gen_live_preview = gr.Image(label="Live Preview (Latest Generated + BBoxes)", type="numpy")
+            gen_live_preview_status = gr.Textbox(label="Live Preview Status", lines=6, interactive=False)
             generate_btn.click(
-                fn=run_generate_synthetic,
+                fn=run_generate_synthetic_live,
                 inputs=[
                     background_train,
                     background_val,
@@ -1130,7 +1332,7 @@ def build_ui() -> gr.Blocks:
                     single_label,
                     debug,
                 ],
-                outputs=[gen_log, generated_dataset_path],
+                outputs=[gen_log, generated_dataset_path, gen_live_preview, gen_live_preview_status],
             )
 
         # 3) Batch VLM on SBB + combine/export
@@ -1279,6 +1481,9 @@ def build_ui() -> gr.Blocks:
                 image_select = gr.Dropdown(label="Image", choices=[])
             preview_hint = gr.Textbox(label="Preview Status", interactive=False)
             preview_btn = gr.Button("Render Preview", variant="primary")
+            with gr.Row():
+                prev_img_btn = gr.Button("Zurueck")
+                next_img_btn = gr.Button("Vor")
             preview_img = gr.Image(label="Image with Label Boxes", type="numpy")
             preview_txt = gr.Textbox(label="Label Summary", lines=12, interactive=False)
 
@@ -1292,6 +1497,16 @@ def build_ui() -> gr.Blocks:
                 fn=preview_sample,
                 inputs=[dataset_select, split_select, image_select],
                 outputs=[preview_img, preview_txt],
+            )
+            prev_img_btn.click(
+                fn=lambda d, s, i: preview_adjacent_sample(d, s, i, -1),
+                inputs=[dataset_select, split_select, image_select],
+                outputs=[image_select, preview_img, preview_txt],
+            )
+            next_img_btn.click(
+                fn=lambda d, s, i: preview_adjacent_sample(d, s, i, 1),
+                inputs=[dataset_select, split_select, image_select],
+                outputs=[image_select, preview_img, preview_txt],
             )
 
         # 5) Training

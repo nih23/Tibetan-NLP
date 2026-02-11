@@ -72,6 +72,46 @@ PARSER_SPECS: Dict[str, ParserSpec] = {
         license="Apache-2.0",
         notes="Lightweight document parsing backend."
     ),
+    "deepseek_ocr": ParserSpec(
+        key="deepseek_ocr",
+        display_name="DeepSeek OCR (VLM)",
+        family="DeepSeek-VL",
+        stage="preview",
+        supports_layout=True,
+        supports_ocr=True,
+        license="Model-specific",
+        notes="Transformer VLM backend using a DeepSeek-VL model."
+    ),
+    "qwen3_vl": ParserSpec(
+        key="qwen3_vl",
+        display_name="Qwen3-VL (layout-only)",
+        family="Qwen-VL",
+        stage="preview",
+        supports_layout=True,
+        supports_ocr=False,
+        license="Apache-2.0",
+        notes="Layout-only bounding box extraction (no OCR text expected)."
+    ),
+    "groundingdino": ParserSpec(
+        key="groundingdino",
+        display_name="GroundingDINO (layout-only)",
+        family="GroundingDINO",
+        stage="preview",
+        supports_layout=True,
+        supports_ocr=False,
+        license="Apache-2.0",
+        notes="Zero-shot grounding for region detection (no OCR text)."
+    ),
+    "florence2": ParserSpec(
+        key="florence2",
+        display_name="Florence-2 (layout-only)",
+        family="Microsoft Florence",
+        stage="preview",
+        supports_layout=True,
+        supports_ocr=False,
+        license="MIT",
+        notes="Layout-only bounding box extraction via vision-language prompting."
+    ),
 }
 
 
@@ -81,6 +121,10 @@ PARSER_CLASS_PATHS = {
     "paddleocr_vl": ("tibetan_utils.parsers.transformer_vlm", "PaddleOCRVLParser"),
     "qwen25vl": ("tibetan_utils.parsers.transformer_vlm", "Qwen25VLParser"),
     "granite_docling": ("tibetan_utils.parsers.transformer_vlm", "GraniteDoclingParser"),
+    "deepseek_ocr": ("tibetan_utils.parsers.transformer_vlm", "DeepSeekOCRParser"),
+    "qwen3_vl": ("tibetan_utils.parsers.transformer_vlm", "Qwen3VLLayoutParser"),
+    "groundingdino": ("tibetan_utils.parsers.transformer_vlm", "GroundingDINOLayoutParser"),
+    "florence2": ("tibetan_utils.parsers.transformer_vlm", "Florence2LayoutParser"),
 }
 
 

@@ -28,15 +28,27 @@ class TransformersVLMParser(DocumentParser):
         max_new_tokens: int = 1024,
         hf_device: str = "auto",
         hf_dtype: str = "auto",
+        layout_only: bool = False,
     ):
         if not model_id:
             raise ValueError("model_id is required for transformer parser backends")
         self.model_id = model_id
-        self.prompt = prompt or (
-            "Extract page layout blocks and OCR text. "
-            "Return strict JSON with key 'detections' containing a list of objects with: "
-            "text, label, confidence, and bbox=[x0,y0,x1,y1]."
-        )
+        self.layout_only = layout_only
+        if prompt:
+            self.prompt = prompt
+        elif self.layout_only:
+            self.prompt = (
+                "Detect only page layout regions (no OCR). "
+                "Return strict JSON with key 'detections' containing a list of objects with: "
+                "label, confidence, and bbox=[x0,y0,x1,y1]. "
+                "Use labels from: tibetan_number_word, tibetan_text, chinese_number_word."
+            )
+        else:
+            self.prompt = (
+                "Extract page layout blocks and OCR text. "
+                "Return strict JSON with key 'detections' containing a list of objects with: "
+                "text, label, confidence, and bbox=[x0,y0,x1,y1]."
+            )
         self.max_new_tokens = max_new_tokens
         self.hf_device = hf_device
         self.hf_dtype = hf_dtype
@@ -188,7 +200,11 @@ class TransformersVLMParser(DocumentParser):
             except Exception:
                 continue
 
-        # Final fallback: keep text as one detection.
+        # Final fallback:
+        # - OCR-capable parsers keep raw text as a synthetic detection.
+        # - layout-only parsers return no detections on unparseable output.
+        if self.layout_only:
+            return {"detections": []}
         return {"detections": [{"text": clean, "label": "raw_text", "bbox": [0, 0, 1, 1], "confidence": 0.1}]}
 
     @staticmethod
@@ -214,8 +230,10 @@ class TransformersVLMParser(DocumentParser):
                 continue
             label = str(det.get("label") or det.get("type") or det.get("class_name") or "text")
             text = str(det.get("text") or det.get("content") or det.get("ocr") or "").strip()
-            if not text:
+            if (not text) and (not self.layout_only):
                 continue
+            if self.layout_only:
+                text = ""
             conf = det.get("confidence", det.get("score", det.get("prob", 1.0)))
             try:
                 conf_f = float(conf)
@@ -298,3 +316,194 @@ class GraniteDoclingParser(TransformersVLMParser):
     def __init__(self, **kwargs):
         model_id = kwargs.pop("model_id", "ibm-granite/granite-docling-258M")
         super().__init__(model_id=model_id, **kwargs)
+
+
+class DeepSeekOCRParser(TransformersVLMParser):
+    parser_name = "deepseek_ocr"
+
+    def __init__(self, **kwargs):
+        model_id = kwargs.pop("model_id", "deepseek-ai/deepseek-vl2-small")
+        super().__init__(model_id=model_id, **kwargs)
+
+
+class Qwen3VLLayoutParser(TransformersVLMParser):
+    parser_name = "qwen3_vl"
+
+    def __init__(self, **kwargs):
+        model_id = kwargs.pop("model_id", "Qwen/Qwen3-VL-8B-Instruct")
+        super().__init__(model_id=model_id, layout_only=True, **kwargs)
+
+
+class Florence2LayoutParser(TransformersVLMParser):
+    parser_name = "florence2"
+
+    def __init__(self, **kwargs):
+        model_id = kwargs.pop("model_id", "microsoft/Florence-2-large")
+        super().__init__(model_id=model_id, layout_only=True, **kwargs)
+
+
+class GroundingDINOLayoutParser(DocumentParser):
+    """GroundingDINO layout-only detector backend (no OCR text extraction)."""
+
+    parser_name = "groundingdino"
+
+    def __init__(
+        self,
+        model_id: str = "IDEA-Research/grounding-dino-base",
+        hf_device: str = "auto",
+        hf_dtype: str = "auto",
+        box_threshold: float = 0.20,
+        text_threshold: float = 0.20,
+        labels: Optional[List[str]] = None,
+        **_: Any,
+    ):
+        self.model_id = model_id
+        self.hf_device = hf_device
+        self.hf_dtype = hf_dtype
+        self.box_threshold = float(box_threshold)
+        self.text_threshold = float(text_threshold)
+        self.labels = labels or ["tibetan_number_word", "tibetan_text", "chinese_number_word"]
+        self._processor = None
+        self._model = None
+
+    @classmethod
+    def is_available(cls) -> tuple[bool, str]:
+        try:
+            import transformers  # noqa: F401
+            import torch  # noqa: F401
+            return True, "transformers + torch available"
+        except Exception as exc:
+            return False, f"missing dependency: {exc}"
+
+    def parse(
+        self,
+        image: Union[str, np.ndarray],
+        output_dir: Optional[str] = None,
+        image_name: Optional[str] = None
+    ) -> ParsedDocument:
+        pil_img, resolved_name = self._load_image(image, image_name=image_name)
+        detections = self._detect(pil_img)
+
+        return ParsedDocument(
+            image_name=resolved_name,
+            parser=self.parser_name,
+            detections=detections,
+            metadata={
+                "model_id": self.model_id,
+                "backend": "groundingdino",
+                "layout_only": True,
+            },
+        )
+
+    def _load_image(
+        self,
+        image: Union[str, np.ndarray],
+        image_name: Optional[str] = None
+    ) -> Tuple[Image.Image, str]:
+        if isinstance(image, str):
+            image_path = Path(image)
+            if not image_path.exists():
+                raise FileNotFoundError(f"Input image not found: {image_path}")
+            return Image.open(image_path).convert("RGB"), image_path.name
+
+        resolved_name = image_name or "image.png"
+        if image.ndim == 2:
+            pil_img = Image.fromarray(image).convert("RGB")
+        else:
+            pil_img = Image.fromarray(image[:, :, :3]).convert("RGB")
+        return pil_img, resolved_name
+
+    def _detect(self, image: Image.Image) -> List[ParsedDetection]:
+        import torch
+        from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+
+        if self._processor is None:
+            self._processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
+
+        if self._model is None:
+            kwargs: Dict[str, Any] = {"trust_remote_code": True}
+            dtype = self._resolve_dtype(torch)
+            if dtype != "auto":
+                kwargs["torch_dtype"] = dtype
+            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_id, **kwargs)
+            self._model.eval()
+
+        model_device = self._resolve_device(torch)
+        if model_device is not None:
+            self._model.to(model_device)
+
+        prompt = ". ".join(self.labels)
+        inputs = self._processor(images=image, text=prompt, return_tensors="pt")
+        if model_device is not None:
+            for key, value in list(inputs.items()):
+                if hasattr(value, "to"):
+                    inputs[key] = value.to(model_device)
+
+        with torch.no_grad():
+            outputs = self._model(**inputs)
+
+        target_sizes = [(image.height, image.width)]
+        processed = self._processor.post_process_grounded_object_detection(
+            outputs,
+            inputs.input_ids,
+            box_threshold=self.box_threshold,
+            text_threshold=self.text_threshold,
+            target_sizes=target_sizes,
+        )
+        if not processed:
+            return []
+
+        result = processed[0]
+        boxes = result.get("boxes", [])
+        scores = result.get("scores", [])
+        labels = result.get("labels", [])
+
+        detections: List[ParsedDetection] = []
+        for i in range(len(boxes)):
+            x1, y1, x2, y2 = [float(v) for v in boxes[i].tolist()]
+            label = str(labels[i]) if i < len(labels) else "tibetan_text"
+            score = float(scores[i].item()) if i < len(scores) else 1.0
+            class_id = self._map_class_id(label)
+            detections.append(
+                ParsedDetection(
+                    id=i,
+                    box={
+                        "x": (x1 + x2) / 2.0,
+                        "y": (y1 + y2) / 2.0,
+                        "width": abs(x2 - x1),
+                        "height": abs(y2 - y1),
+                    },
+                    confidence=score,
+                    class_id=class_id,
+                    text="",
+                    label=label,
+                )
+            )
+        return detections
+
+    @staticmethod
+    def _map_class_id(label: str) -> int:
+        lowered = label.lower()
+        if "tibetan_number" in lowered or "tib_no" in lowered or "left" in lowered:
+            return 0
+        if "chinese_number" in lowered or "chi_no" in lowered or "right" in lowered:
+            return 2
+        return 1
+
+    def _resolve_dtype(self, torch_module):
+        if self.hf_dtype in ("auto", "", None):
+            return "auto"
+        if hasattr(torch_module, self.hf_dtype):
+            return getattr(torch_module, self.hf_dtype)
+        return "auto"
+
+    def _resolve_device(self, torch_module):
+        if self.hf_device in ("", "auto", None):
+            if hasattr(torch_module, "cuda") and torch_module.cuda.is_available():
+                return torch_module.device("cuda")
+            return torch_module.device("cpu")
+        if self.hf_device == "cuda":
+            if hasattr(torch_module, "cuda") and torch_module.cuda.is_available():
+                return torch_module.device("cuda")
+            return torch_module.device("cpu")
+        return torch_module.device(self.hf_device)

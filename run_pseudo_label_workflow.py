@@ -25,7 +25,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--parser",
         default="paddleocr_vl",
-        choices=["mineru25", "paddleocr_vl", "qwen25vl", "granite_docling"],
+        choices=[
+            "mineru25",
+            "paddleocr_vl",
+            "qwen25vl",
+            "granite_docling",
+            "deepseek_ocr",
+            "qwen3_vl",
+            "groundingdino",
+            "florence2",
+        ],
         help="Pseudo-label backend",
     )
     parser.add_argument("--recursive", action="store_true", help="Scan input recursively")

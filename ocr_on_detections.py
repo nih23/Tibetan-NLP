@@ -8,6 +8,10 @@ Supports multiple parser backends:
 - paddleocr_vl: Transformer-based PaddleOCR-VL backend
 - qwen25vl: Transformer-based Qwen-VL backend
 - granite_docling: Transformer-based Granite-Docling backend
+- deepseek_ocr: Transformer-based DeepSeek-VL backend
+- qwen3_vl: Qwen3-VL layout-only backend (no OCR text)
+- groundingdino: GroundingDINO layout-only backend (no OCR text)
+- florence2: Florence-2 layout-only backend (no OCR text)
 """
 
 from pathlib import Path
@@ -46,7 +50,15 @@ def build_backend(args):
             mineru_command=args.mineru_command,
             timeout_sec=args.mineru_timeout,
         )
-    if args.parser in ("paddleocr_vl", "qwen25vl", "granite_docling"):
+    if args.parser in (
+        "paddleocr_vl",
+        "qwen25vl",
+        "granite_docling",
+        "deepseek_ocr",
+        "qwen3_vl",
+        "groundingdino",
+        "florence2",
+    ):
         kwargs = {
             "prompt": args.vlm_prompt if args.vlm_prompt else None,
             "max_new_tokens": args.vlm_max_new_tokens,

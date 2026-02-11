@@ -155,7 +155,17 @@ def add_ocr_arguments(parser):
     parser.add_argument('--tesseract-config', type=str, default='',
                        help='Additional Tesseract configuration')
     parser.add_argument('--parser', type=str, default='legacy',
-                       choices=['legacy', 'mineru25', 'paddleocr_vl', 'qwen25vl', 'granite_docling'],
+                       choices=[
+                           'legacy',
+                           'mineru25',
+                           'paddleocr_vl',
+                           'qwen25vl',
+                           'granite_docling',
+                           'deepseek_ocr',
+                           'qwen3_vl',
+                           'groundingdino',
+                           'florence2',
+                       ],
                        help='OCR/layout backend to use')
     parser.add_argument('--list-parsers', action='store_true',
                        help='List available parser backends and exit')
