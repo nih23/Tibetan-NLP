@@ -379,8 +379,8 @@ def run_generate_synthetic_live(
             cwd=str(ROOT),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+            text=False,
+            bufsize=0,
         )
     except Exception as exc:
         msg = f"Failed\nDataset path: {dataset_path}\n\n{type(exc).__name__}: {exc}"
@@ -401,16 +401,27 @@ def run_generate_synthetic_live(
     last_preview_ts = 0.0
     last_emit_log_count = 0
     partial = ""
+    stream_failed = False
+    stream_fail_msg = ""
     while True:
         got_output = False
-        if proc.stdout is not None:
+        if (not stream_failed) and proc.stdout is not None:
             try:
                 chunk = proc.stdout.read()
             except BlockingIOError:
-                chunk = ""
+                chunk = b""
+            except Exception as exc:
+                # Fallback: continue preview polling even if stdout streaming breaks.
+                stream_failed = True
+                stream_fail_msg = f"stdout stream disabled ({type(exc).__name__}: {exc})"
+                chunk = b""
             if chunk:
                 got_output = True
-                partial += chunk
+                if isinstance(chunk, bytes):
+                    chunk_text = chunk.decode("utf-8", errors="replace")
+                else:
+                    chunk_text = str(chunk)
+                partial += chunk_text
                 parts = partial.splitlines(keepends=True)
                 keep = ""
                 for piece in parts:
@@ -425,6 +436,11 @@ def run_generate_synthetic_live(
         if should_emit:
             preview_img, preview_txt = _latest_generated_sample(dataset_path)
             tail = "\n".join(log_lines[-400:])
+            if stream_failed and stream_fail_msg:
+                if tail:
+                    tail = f"{tail}\n[warning] {stream_fail_msg}"
+                else:
+                    tail = f"[warning] {stream_fail_msg}"
             running_msg = f"Running ...\nDataset path: {dataset_path}\n\n{tail}"
             yield running_msg, dataset_path, preview_img, preview_txt
             last_preview_ts = now
@@ -440,9 +456,12 @@ def run_generate_synthetic_live(
         try:
             rest = proc.stdout.read()
         except Exception:
-            rest = ""
+            rest = b""
         if rest:
-            partial += rest
+            if isinstance(rest, bytes):
+                partial += rest.decode("utf-8", errors="replace")
+            else:
+                partial += str(rest)
         if partial:
             log_lines.extend(partial.splitlines())
 
