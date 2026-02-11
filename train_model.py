@@ -5,8 +5,10 @@ Unterstützt Weights & Biases (wandb) Logging für Experiment-Tracking.
 """
 
 import os
+import tempfile
 from pathlib import Path
 import wandb
+import yaml
 from ultralytics.data.utils import DATASETS_DIR
 
 # Importiere Funktionen aus der tibetan_utils-Bibliothek
@@ -74,6 +76,43 @@ def save_model_to_wandb(model_path, export_path=None):
     wandb.log_artifact(artifact)
 
 
+def normalize_dataset_yaml_for_ultralytics(yaml_path: Path) -> Path:
+    """
+    Create a temporary dataset YAML with absolute paths so Ultralytics does not
+    resolve relative paths against its global DATASETS_DIR.
+    """
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+
+    if not isinstance(cfg, dict):
+        raise ValueError(f"Dataset YAML must contain a mapping: {yaml_path}")
+
+    raw_root = cfg.get("path", "")
+    if raw_root:
+        root = Path(raw_root).expanduser()
+        if not root.is_absolute():
+            root = (yaml_path.parent / root).resolve()
+    else:
+        root = yaml_path.parent.resolve()
+
+    cfg["path"] = str(root)
+
+    for key in ("train", "val", "test"):
+        if key not in cfg or cfg[key] in ("", None):
+            continue
+        split = Path(str(cfg[key])).expanduser()
+        if not split.is_absolute():
+            split = (root / split).resolve()
+        cfg[key] = str(split)
+
+    fd, tmp_name = tempfile.mkstemp(prefix="pechabridge_dataset_", suffix=".yaml")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
+    return tmp_path
+
+
 def main():
     # Parse arguments
     parser = create_train_parser()
@@ -131,7 +170,11 @@ def main():
         print("python train_model.py --dataset ./datasets/tibetan-yolo --epochs 100")
         return
 
+    normalized_data_path = normalize_dataset_yaml_for_ultralytics(data_path)
+
     print(f"Starte Training mit Datensatz: {data_path}")
+    if normalized_data_path != data_path:
+        print(f"Nutze normalisierte Dataset-YAML (absolute Pfade): {normalized_data_path}")
     print(f"Basis-Modell: {args.model}")
     print(f"Epochen: {args.epochs}")
     print(f"Bildgröße: {args.imgsz}x{args.imgsz}")
@@ -146,7 +189,7 @@ def main():
     # Train model
     results = ModelManager.train_model(
         model,
-        data_path=str(data_path),
+        data_path=str(normalized_data_path),
         epochs=args.epochs,
         image_size=args.imgsz,
         batch_size=args.batch,
