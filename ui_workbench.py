@@ -502,6 +502,237 @@ def run_generate_synthetic_live(
     yield final_log, dataset_path, preview_img, preview_txt
 
 
+def _list_images_recursive(root_dir: Path) -> List[Path]:
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
+    if not root_dir.exists():
+        return []
+    return sorted([p for p in root_dir.rglob("*") if p.is_file() and p.suffix.lower() in exts])
+
+
+def _latest_image_from_folder(folder: str) -> Tuple[Optional[np.ndarray], str]:
+    out_dir = Path(folder).expanduser().resolve()
+    if not out_dir.exists():
+        return None, f"Output folder not found: {out_dir}"
+
+    candidates: List[Tuple[float, Path]] = []
+    for image_path in _list_images_recursive(out_dir):
+        try:
+            candidates.append((image_path.stat().st_mtime, image_path))
+        except Exception:
+            continue
+
+    if not candidates:
+        return None, f"No images found in {out_dir}"
+
+    for _, image_path in sorted(candidates, key=lambda x: x[0], reverse=True):
+        last_err: Optional[Exception] = None
+        for _ in range(3):
+            try:
+                with Image.open(image_path) as im:
+                    arr = np.array(im.convert("RGB"))
+                rel = image_path.relative_to(out_dir)
+                return arr, f"Latest output: {rel}"
+            except OSError as exc:
+                last_err = exc
+                time.sleep(0.08)
+        if last_err is not None:
+            continue
+
+    return None, f"Waiting for stable output image write in {out_dir} ..."
+
+
+def preview_latest_texture_output(output_dir: str):
+    return _latest_image_from_folder(output_dir)
+
+
+def run_texture_augment_live(
+    input_dir: str,
+    output_dir: str,
+    strength: float,
+    steps: int,
+    guidance_scale: float,
+    seed: Optional[int],
+    controlnet_scale: float,
+    lora_path: str,
+    lora_scale: float,
+    prompt: str,
+    base_model_id: str,
+    controlnet_model_id: str,
+    canny_low: int,
+    canny_high: int,
+):
+    in_dir = Path(input_dir).expanduser().resolve()
+    out_dir = Path(output_dir).expanduser().resolve()
+    script_path = ROOT / "scripts" / "texture_augment.py"
+
+    if not script_path.exists():
+        msg = f"Failed: script not found: {script_path}"
+        preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
+        yield msg, preview_img, preview_txt
+        return
+    if not in_dir.exists() or not in_dir.is_dir():
+        msg = f"Failed: input_dir does not exist: {in_dir}"
+        preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
+        yield msg, preview_img, preview_txt
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    seed_arg: Optional[int] = None
+    try:
+        if seed is not None:
+            seed_int = int(float(seed))
+            if seed_int >= 0:
+                seed_arg = seed_int
+    except Exception:
+        seed_arg = None
+
+    cmd = [
+        sys.executable,
+        "-u",
+        str(script_path),
+        "--input_dir",
+        str(in_dir),
+        "--output_dir",
+        str(out_dir),
+        "--strength",
+        str(float(strength)),
+        "--steps",
+        str(int(steps)),
+        "--guidance_scale",
+        str(float(guidance_scale)),
+        "--controlnet_scale",
+        str(float(controlnet_scale)),
+        "--lora_scale",
+        str(float(lora_scale)),
+        "--prompt",
+        (prompt or "").strip(),
+        "--base_model_id",
+        (base_model_id or "stabilityai/stable-diffusion-xl-base-1.0").strip(),
+        "--controlnet_model_id",
+        (controlnet_model_id or "diffusers/controlnet-canny-sdxl-1.0").strip(),
+        "--canny_low",
+        str(int(canny_low)),
+        "--canny_high",
+        str(int(canny_high)),
+    ]
+    if seed_arg is not None:
+        cmd.extend(["--seed", str(seed_arg)])
+    lora = (lora_path or "").strip()
+    if lora:
+        cmd.extend(["--lora_path", lora])
+
+    try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0,
+        )
+    except Exception as exc:
+        msg = f"Failed\nOutput dir: {out_dir}\n\n{type(exc).__name__}: {exc}"
+        preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
+        yield msg, preview_img, preview_txt
+        return
+
+    if proc.stdout is not None:
+        try:
+            os.set_blocking(proc.stdout.fileno(), False)
+        except Exception:
+            pass
+
+    log_lines: List[str] = []
+    partial = ""
+    last_emit_ts = 0.0
+    stream_failed = False
+    stream_fail_msg = ""
+
+    preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
+    yield (
+        "Running SDXL texture augmentation ...\n"
+        f"Input dir: {in_dir}\n"
+        f"Output dir: {out_dir}\n"
+        f"Command: {shlex.join(cmd)}\n",
+        preview_img,
+        preview_txt,
+    )
+
+    while True:
+        got_output = False
+        if (not stream_failed) and proc.stdout is not None:
+            try:
+                chunk = proc.stdout.read()
+            except BlockingIOError:
+                chunk = b""
+            except Exception as exc:
+                stream_failed = True
+                stream_fail_msg = f"stdout stream disabled ({type(exc).__name__}: {exc})"
+                chunk = b""
+
+            if chunk:
+                got_output = True
+                if isinstance(chunk, bytes):
+                    chunk_text = chunk.decode("utf-8", errors="replace")
+                else:
+                    chunk_text = str(chunk)
+                partial += chunk_text.replace("\r", "\n")
+                parts = partial.splitlines(keepends=True)
+                keep = ""
+                for piece in parts:
+                    if piece.endswith("\n"):
+                        log_lines.append(piece.rstrip("\n"))
+                    else:
+                        keep = piece
+                partial = keep
+
+        now = time.time()
+        if now - last_emit_ts >= 1.0:
+            preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
+            tail = _tail_lines_newest_first(log_lines, 800)
+            if stream_failed and stream_fail_msg:
+                tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
+            running_msg = (
+                "Running SDXL texture augmentation ...\n"
+                f"Input dir: {in_dir}\n"
+                f"Output dir: {out_dir}\n\n{tail}"
+            )
+            yield running_msg, preview_img, preview_txt
+            last_emit_ts = now
+
+        if proc.poll() is not None:
+            break
+
+        if not got_output:
+            time.sleep(0.15)
+
+    if proc.stdout is not None:
+        try:
+            rest = proc.stdout.read()
+        except Exception:
+            rest = b""
+        if rest:
+            if isinstance(rest, bytes):
+                partial += rest.decode("utf-8", errors="replace").replace("\r", "\n")
+            else:
+                partial += str(rest).replace("\r", "\n")
+        if partial:
+            log_lines.extend(partial.splitlines())
+
+    ok = proc.returncode == 0
+    status = "Success" if ok else "Failed"
+    preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
+    final_msg = (
+        f"{status}\nInput dir: {in_dir}\nOutput dir: {out_dir}\n\n"
+        + _tail_lines_newest_first(log_lines, 3000)
+    )
+    yield final_msg, preview_img, preview_txt
+
+
 def refresh_image_list(dataset_dir: str, split: str):
     split_images = Path(dataset_dir).expanduser().resolve() / split / "images"
     images = _list_images(split_images)
@@ -1548,6 +1779,8 @@ def build_ui() -> gr.Blocks:
     default_dataset_base = str((ROOT / "datasets").resolve())
     default_dataset = str((ROOT / "datasets" / "tibetan-yolo").resolve())
     default_split_dir = str((ROOT / "datasets" / "tibetan-yolo" / "train").resolve())
+    default_texture_input_dir = str((ROOT / "datasets" / "tibetan-yolo-ui" / "train" / "images").resolve())
+    default_texture_output_dir = str((ROOT / "datasets" / "tibetan-yolo-ui-textured").resolve())
     default_prompt = (
         "Extract page layout blocks and OCR text. "
         "Return strict JSON with key 'detections' containing a list of objects with: "
@@ -1573,8 +1806,9 @@ def build_ui() -> gr.Blocks:
         with gr.Tab("1. Hello"):
             gr.Markdown("## Workflow Overview")
             gr.Markdown(
-                "Use the tabs left-to-right. A practical flow is: Synthetic Data -> Batch VLM Layout (SBB) -> "
-                "Dataset Preview -> Ultralytics Training -> Model Inference -> VLM Layout (single image) -> Label Studio Export."
+                "Use the tabs left-to-right. A practical flow is: Synthetic Data -> Diffusion + LoRA (texture) -> "
+                "Batch VLM Layout (SBB) -> Dataset Preview -> Ultralytics Training -> Model Inference -> "
+                "VLM Layout (single image) -> Label Studio Export."
             )
             gr.Markdown("### Tabs")
             gr.Markdown(
@@ -1587,7 +1821,8 @@ def build_ui() -> gr.Blocks:
                 "7. VLM Layout: Run transformer-based layout parsing on a single image.\n"
                 "8. Label Studio Export: Convert YOLO split folders to Label Studio tasks and launch Label Studio.\n"
                 "9. PPN Downloader: Download and analyze SBB images.\n"
-                "10. CLI Audit: Show all CLI options from project scripts."
+                "10. Diffusion + LoRA: Run SDXL + ControlNet Canny texture augmentation with optional LoRA.\n"
+                "11. CLI Audit: Show all CLI options from project scripts."
             )
 
         # 2) Data generation
@@ -2148,8 +2383,94 @@ def build_ui() -> gr.Blocks:
                 outputs=[ppn_overlay, ppn_analysis_status, ppn_analysis_json],
             )
 
-        # 10) CLI reference
-        with gr.Tab("10. CLI Audit"):
+        # 10) Diffusion + LoRA texture augmentation
+        with gr.Tab("10. Diffusion + LoRA"):
+            gr.Markdown(
+                "Apply paper/ink/scan texture using SDXL + ControlNet Canny while preserving glyph geometry. "
+                "Optionally load LoRA weights trained on real pecha crops."
+            )
+            with gr.Row():
+                with gr.Column(scale=1):
+                    diff_input_dir = gr.Textbox(label="input_dir", value=default_texture_input_dir)
+                    diff_output_dir = gr.Textbox(label="output_dir", value=default_texture_output_dir)
+                    diff_prompt = gr.Textbox(
+                        label="prompt",
+                        value="scanned printed page",
+                        lines=2,
+                    )
+                    diff_lora_path = gr.Textbox(
+                        label="lora_path (optional)",
+                        value="",
+                        placeholder="Path to LoRA directory or *.safetensors",
+                    )
+                    with gr.Row():
+                        diff_strength = gr.Slider(
+                            minimum=0.0,
+                            maximum=0.25,
+                            value=0.2,
+                            step=0.01,
+                            label="strength (<= 0.25 for structure preservation)",
+                        )
+                        diff_steps = gr.Number(label="steps", value=28, precision=0)
+                    with gr.Row():
+                        diff_guidance_scale = gr.Slider(0.0, 4.0, value=1.0, step=0.1, label="guidance_scale")
+                        diff_controlnet_scale = gr.Slider(0.5, 3.0, value=2.0, step=0.1, label="controlnet_scale")
+                    with gr.Row():
+                        diff_lora_scale = gr.Slider(0.0, 2.0, value=0.8, step=0.05, label="lora_scale")
+                        diff_seed = gr.Number(
+                            label="seed (-1 for random)",
+                            value=123,
+                            precision=0,
+                        )
+                    with gr.Accordion("Advanced Models / Canny", open=False):
+                        diff_base_model_id = gr.Textbox(
+                            label="base_model_id",
+                            value="stabilityai/stable-diffusion-xl-base-1.0",
+                        )
+                        diff_controlnet_model_id = gr.Textbox(
+                            label="controlnet_model_id",
+                            value="diffusers/controlnet-canny-sdxl-1.0",
+                        )
+                        with gr.Row():
+                            diff_canny_low = gr.Number(label="canny_low", value=100, precision=0)
+                            diff_canny_high = gr.Number(label="canny_high", value=200, precision=0)
+
+                    with gr.Row():
+                        diff_run_btn = gr.Button("Run Texture Augmentation", variant="primary")
+                        diff_preview_btn = gr.Button("Preview Latest Output")
+                with gr.Column(scale=1):
+                    diff_preview = gr.Image(type="numpy", label="Latest Augmented Output")
+                    diff_preview_status = gr.Textbox(label="Preview Status", interactive=False)
+                    diff_log = gr.Textbox(label="Texture Augmentation Log", lines=20, interactive=False)
+
+            diff_run_btn.click(
+                fn=run_texture_augment_live,
+                inputs=[
+                    diff_input_dir,
+                    diff_output_dir,
+                    diff_strength,
+                    diff_steps,
+                    diff_guidance_scale,
+                    diff_seed,
+                    diff_controlnet_scale,
+                    diff_lora_path,
+                    diff_lora_scale,
+                    diff_prompt,
+                    diff_base_model_id,
+                    diff_controlnet_model_id,
+                    diff_canny_low,
+                    diff_canny_high,
+                ],
+                outputs=[diff_log, diff_preview, diff_preview_status],
+            )
+            diff_preview_btn.click(
+                fn=preview_latest_texture_output,
+                inputs=[diff_output_dir],
+                outputs=[diff_preview, diff_preview_status],
+            )
+
+        # 11) CLI reference
+        with gr.Tab("11. CLI Audit"):
             audit_btn = gr.Button("Scan All CLI Options")
             audit_out = gr.Markdown()
             audit_btn.click(fn=collect_cli_help, inputs=[], outputs=[audit_out])
