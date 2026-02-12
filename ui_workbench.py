@@ -17,6 +17,7 @@ import shlex
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1774,6 +1775,7 @@ def download_ppn_images(
     output_dir: str,
     max_images: int,
     no_ssl_verify: bool,
+    download_workers: int,
 ):
     if not ppn or not ppn.strip():
         return "Please provide a PPN.", gr.update(choices=[], value=None)
@@ -1795,15 +1797,34 @@ def download_ppn_images(
             urls = urls[: int(max_images)]
 
         downloaded: List[Path] = []
-        for url in urls:
-            saved = download_image(url, output_dir=str(out_dir), verify_ssl=verify_ssl)
-            if saved:
-                downloaded.append(Path(saved))
+        workers = max(1, int(download_workers))
+        if workers == 1 or len(urls) <= 1:
+            for url in urls:
+                saved = download_image(url, output_dir=str(out_dir), verify_ssl=verify_ssl)
+                if saved:
+                    downloaded.append(Path(saved))
+        else:
+            max_workers = min(workers, len(urls))
+            ordered: List[Optional[Path]] = [None] * len(urls)
+
+            def _dl(pair: Tuple[int, str]) -> Tuple[int, Optional[Path]]:
+                idx, url = pair
+                saved = download_image(url, output_dir=str(out_dir), verify_ssl=verify_ssl)
+                return idx, (Path(saved) if saved else None)
+
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = [ex.submit(_dl, pair) for pair in enumerate(urls)]
+                for fut in as_completed(futures):
+                    idx, p = fut.result()
+                    ordered[idx] = p
+
+            downloaded = [p for p in ordered if p is not None]
 
         md = get_sbb_metadata(ppn.strip(), verify_ssl=verify_ssl)
         names = sorted([p.name for p in downloaded])
         summary = (
             f"Downloaded {len(downloaded)} image(s) for PPN {ppn} to {out_dir}\n"
+            f"Workers: {workers}\n"
             f"Title: {md.get('title')}\nAuthor: {md.get('author')}\nPages: {md.get('pages')}\n"
         )
         return summary, gr.update(choices=names, value=(names[0] if names else None))
@@ -2696,6 +2717,7 @@ def build_ui() -> gr.Blocks:
                     ppn_value = gr.Textbox(label="PPN", value="")
                     ppn_output_dir = gr.Textbox(label="output_dir", value=str((ROOT / "sbb_images").resolve()))
                     ppn_max_images = gr.Number(label="max_images (0=all)", value=0, precision=0)
+                    ppn_download_workers = gr.Number(label="download_workers", value=8, precision=0)
                     ppn_no_ssl = gr.Checkbox(label="no_ssl_verify", value=False)
                     ppn_download_btn = gr.Button("Download Images", variant="primary")
                     ppn_log = gr.Textbox(label="Download Log", lines=10)
@@ -2746,7 +2768,7 @@ def build_ui() -> gr.Blocks:
 
             ppn_download_btn.click(
                 fn=download_ppn_images,
-                inputs=[ppn_value, ppn_output_dir, ppn_max_images, ppn_no_ssl],
+                inputs=[ppn_value, ppn_output_dir, ppn_max_images, ppn_no_ssl, ppn_download_workers],
                 outputs=[ppn_log, ppn_image_select],
             )
             ppn_preview_btn.click(
@@ -2995,4 +3017,10 @@ def build_ui() -> gr.Blocks:
 
 if __name__ == "__main__":
     app = build_ui()
-    app.launch()
+    host = os.environ.get("UI_HOST", "127.0.0.1")
+    try:
+        port = int(os.environ.get("UI_PORT", "7860"))
+    except ValueError:
+        port = 7860
+    share = os.environ.get("UI_SHARE", "").strip().lower() in {"1", "true", "yes", "on"}
+    app.launch(server_name=host, server_port=port, share=share)

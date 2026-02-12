@@ -51,6 +51,8 @@ def main():
                         help='Speichere Ergebnisse als .txt Dateien')
     parser.add_argument('--save-conf', action='store_true',
                         help='Speichere Konfidenzwerte in .txt Dateien')
+    parser.add_argument('--download-workers', type=int, default=8,
+                        help='Anzahl paralleler Downloader-Threads (nur mit --download)')
     
     args = parser.parse_args()
 
@@ -100,6 +102,7 @@ def main():
             download=True,
             output_dir=args.output,
             verify_ssl=not args.no_ssl_verify,
+            download_workers=max(1, int(args.download_workers)),
         )
         print(f"\nDownload abgeschlossen. Bilder gespeichert unter: {Path(args.output).resolve()}")
         print(f"Heruntergeladene Bilder: {len(results)}")
@@ -112,6 +115,7 @@ def main():
             download=args.download,
             output_dir=args.output,
             verify_ssl=not args.no_ssl_verify,
+            download_workers=max(1, int(args.download_workers)),
             **predict_args
         )
     
