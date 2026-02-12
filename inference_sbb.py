@@ -54,16 +54,6 @@ def main():
     
     args = parser.parse_args()
 
-    # Check if model exists
-    model_path = Path(args.model)
-    if not model_path.exists():
-        print(f"Fehler: Modell nicht gefunden: {model_path}")
-        return
-
-    # Load model
-    print(f"Lade Modell: {model_path}")
-    model = ModelManager.load_model(str(model_path))
-    
     # Get document metadata
     metadata = get_sbb_metadata(args.ppn, verify_ssl=not args.no_ssl_verify)
     if metadata['title']:
@@ -73,6 +63,20 @@ def main():
         if metadata['date']:
             print(f"Datum: {metadata['date']}")
         print(f"Seiten: {metadata['pages']}")
+
+    model = None
+    model_path = Path(args.model)
+    download_only = bool(args.download and not model_path.exists())
+    if download_only:
+        print(f"Hinweis: Modell nicht gefunden ({model_path}). Starte reinen Download-Modus.")
+    else:
+        # Check if model exists for inference mode
+        if not model_path.exists():
+            print(f"Fehler: Modell nicht gefunden: {model_path}")
+            return
+        # Load model
+        print(f"Lade Modell: {model_path}")
+        model = ModelManager.load_model(str(model_path))
     
     # Prepare prediction arguments
     predict_args = {
@@ -88,15 +92,28 @@ def main():
     }
     
     # Process images
-    results = process_sbb_images(
-        args.ppn,
-        lambda img, **kwargs: process_image(img, model, **kwargs),
-        max_images=args.max_images,
-        download=args.download,
-        output_dir=args.output,
-        verify_ssl=not args.no_ssl_verify,
-        **predict_args
-    )
+    if download_only:
+        results = process_sbb_images(
+            args.ppn,
+            lambda img, **kwargs: {'downloaded_path': str(img)},
+            max_images=args.max_images,
+            download=True,
+            output_dir=args.output,
+            verify_ssl=not args.no_ssl_verify,
+        )
+        print(f"\nDownload abgeschlossen. Bilder gespeichert unter: {Path(args.output).resolve()}")
+        print(f"Heruntergeladene Bilder: {len(results)}")
+        return
+    else:
+        results = process_sbb_images(
+            args.ppn,
+            lambda img, **kwargs: process_image(img, model, **kwargs),
+            max_images=args.max_images,
+            download=args.download,
+            output_dir=args.output,
+            verify_ssl=not args.no_ssl_verify,
+            **predict_args
+        )
     
     # Output directory
     output_dir = Path(args.project) / args.name
