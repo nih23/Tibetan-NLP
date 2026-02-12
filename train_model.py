@@ -7,9 +7,14 @@ Unterstützt Weights & Biases (wandb) Logging für Experiment-Tracking.
 import os
 import tempfile
 from pathlib import Path
-import wandb
 import yaml
+from ultralytics import __version__ as ultralytics_version
 from ultralytics.data.utils import DATASETS_DIR
+from packaging.version import Version, InvalidVersion
+try:
+    import wandb
+except ImportError:  # pragma: no cover - optional dependency
+    wandb = None
 
 # Importiere Funktionen aus der tibetan_utils-Bibliothek
 from tibetan_utils.arg_utils import create_train_parser
@@ -27,6 +32,9 @@ def initialize_wandb(args):
         bool: Whether wandb was initialized
     """
     if not args.wandb:
+        return False
+    if wandb is None:
+        print("Warnung: --wandb gesetzt, aber Paket 'wandb' ist nicht installiert. Logging wird deaktiviert.")
         return False
         
     wandb_name = args.wandb_name if args.wandb_name else args.name
@@ -64,7 +72,7 @@ def save_model_to_wandb(model_path, export_path=None):
         model_path: Path to the model file
         export_path: Path to the exported model file
     """
-    if wandb.run is None:
+    if wandb is None or wandb.run is None:
         return
         
     artifact = wandb.Artifact(name=f"model-{wandb.run.id}", type="model")
@@ -111,6 +119,26 @@ def normalize_dataset_yaml_for_ultralytics(yaml_path: Path) -> Path:
     with open(tmp_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(cfg, f, sort_keys=False, allow_unicode=True)
     return tmp_path
+
+
+def _check_model_compatibility(model_name: str) -> None:
+    """
+    Fail early with a clear message if the selected model family is not
+    supported by the installed Ultralytics version.
+    """
+    if not model_name.lower().startswith("yolo26"):
+        return
+    try:
+        current = Version(ultralytics_version)
+    except InvalidVersion:
+        return
+    minimum = Version("8.4.0")
+    if current < minimum:
+        raise RuntimeError(
+            f"Model '{model_name}' requires a newer Ultralytics release "
+            f"(installed: {ultralytics_version}, required: >= {minimum}). "
+            "Please upgrade with: pip install -U ultralytics"
+        )
 
 
 def main():
@@ -178,12 +206,21 @@ def main():
     print(f"Basis-Modell: {args.model}")
     print(f"Epochen: {args.epochs}")
     print(f"Bildgröße: {args.imgsz}x{args.imgsz}")
+
+    _check_model_compatibility(args.model)
     
     # Initialize Weights & Biases if enabled
     wandb_enabled = initialize_wandb(args)
 
     # Load model
-    model = ModelManager.load_model(args.model)
+    try:
+        model = ModelManager.load_model(args.model)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not load model '{args.model}'. "
+            "If this is a named pretrained model (e.g. yolo26n.pt), Ultralytics "
+            "will auto-download it when internet access is available."
+        ) from exc
 
     # Start training
     # Train model
