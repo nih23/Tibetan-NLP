@@ -312,3 +312,125 @@ def create_ocr_parser():
     add_ocr_arguments(parser)
     add_output_arguments(parser)
     return parser
+
+
+def add_prepare_texture_lora_dataset_arguments(parser):
+    """Arguments for preparing texture LoRA crops from real pecha pages."""
+    parser.add_argument('--input_dir', type=str, required=True,
+                       help='Folder with real pecha page images')
+    parser.add_argument('--output_dir', type=str, required=True,
+                       help='Output folder for generated crops + metadata.jsonl')
+    parser.add_argument('--crop_size', type=int, default=1024,
+                       help='Square crop size in pixels (e.g. 768 or 1024)')
+    parser.add_argument('--num_crops_per_page', type=int, default=12,
+                       help='Number of crops sampled from each page')
+    parser.add_argument('--min_edge_density', type=float, default=0.025,
+                       help='Minimum Canny edge density to treat a crop as text-rich')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed for deterministic crop sampling')
+    parser.add_argument('--canny_low', type=int, default=100,
+                       help='Lower threshold for Canny edges')
+    parser.add_argument('--canny_high', type=int, default=200,
+                       help='Upper threshold for Canny edges')
+
+
+def add_train_texture_lora_arguments(parser):
+    """Arguments for SDXL texture LoRA training."""
+    parser.add_argument('--dataset_dir', type=str, required=True,
+                       help='Folder containing texture crops (or an "images/" subfolder)')
+    parser.add_argument('--output_dir', type=str, required=True,
+                       help='Directory where LoRA weights and training config are saved')
+    parser.add_argument('--resolution', type=int, default=1024,
+                       help='Training resolution for SDXL crops')
+    parser.add_argument('--batch_size', type=int, default=1,
+                       help='Per-device train batch size')
+    parser.add_argument('--lr', type=float, default=1e-4,
+                       help='Learning rate')
+    parser.add_argument('--max_train_steps', type=int, default=1500,
+                       help='Total optimization steps')
+    parser.add_argument('--rank', type=int, default=16,
+                       help='LoRA rank')
+    parser.add_argument('--lora_alpha', type=float, default=16.0,
+                       help='LoRA alpha')
+    parser.add_argument('--mixed_precision', type=str, default='fp16',
+                       choices=['no', 'fp16', 'bf16'],
+                       help='Accelerate mixed precision mode')
+    parser.add_argument('--gradient_checkpointing', action='store_true',
+                       help='Enable gradient checkpointing')
+    parser.add_argument('--prompt', type=str, default='scanned printed page',
+                       help='Generic prompt used for texture LoRA training')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed for deterministic training')
+    parser.add_argument('--base_model_id', type=str,
+                       default='stabilityai/stable-diffusion-xl-base-1.0',
+                       help='Base SDXL model ID')
+    parser.add_argument('--train_text_encoder', action='store_true',
+                       help='Also train text encoder LoRA adapters (off by default)')
+    parser.add_argument('--num_workers', type=int, default=4,
+                       help='Dataloader workers')
+    parser.add_argument('--lora_weights_name', type=str, default='texture_lora.safetensors',
+                       help='Output LoRA filename')
+
+
+def add_texture_augment_arguments(parser):
+    """Arguments for SDXL + ControlNet texture augmentation."""
+    parser.add_argument('--input_dir', type=str, required=True,
+                       help='Folder with synthetic input images')
+    parser.add_argument('--output_dir', type=str, required=True,
+                       help='Folder where texture-augmented images are written')
+    parser.add_argument('--strength', type=float, default=0.2,
+                       help='Img2img strength (kept conservative; values >0.25 are clamped)')
+    parser.add_argument('--steps', type=int, default=28,
+                       help='Diffusion inference steps')
+    parser.add_argument('--guidance_scale', type=float, default=1.0,
+                       help='Classifier-free guidance scale')
+    parser.add_argument('--seed', type=int, default=None,
+                       help='Base random seed; if set, outputs are deterministic')
+    parser.add_argument('--controlnet_scale', type=float, default=2.0,
+                       help='ControlNet conditioning scale (high to preserve structure)')
+    parser.add_argument('--lora_path', type=str, default='',
+                       help='Optional path to LoRA directory or .safetensors file')
+    parser.add_argument('--lora_scale', type=float, default=0.8,
+                       help='LoRA scale for cross attention')
+    parser.add_argument('--prompt', type=str, default='scanned printed page',
+                       help='Prompt for texture transfer (can be empty)')
+    parser.add_argument('--base_model_id', type=str,
+                       default='stabilityai/stable-diffusion-xl-base-1.0',
+                       help='Base SDXL model ID')
+    parser.add_argument('--controlnet_model_id', type=str,
+                       default='diffusers/controlnet-canny-sdxl-1.0',
+                       help='SDXL ControlNet Canny model ID')
+    parser.add_argument('--canny_low', type=int, default=100,
+                       help='Lower threshold for Canny conditioning map')
+    parser.add_argument('--canny_high', type=int, default=200,
+                       help='Upper threshold for Canny conditioning map')
+
+
+def create_prepare_texture_lora_dataset_parser(add_help: bool = True):
+    """Create parser for preparing a texture LoRA crop dataset."""
+    parser = argparse.ArgumentParser(
+        description="Prepare texture-focused LoRA crops from real pecha pages",
+        add_help=add_help,
+    )
+    add_prepare_texture_lora_dataset_arguments(parser)
+    return parser
+
+
+def create_train_texture_lora_parser(add_help: bool = True):
+    """Create parser for training SDXL texture LoRA."""
+    parser = argparse.ArgumentParser(
+        description="Train SDXL texture LoRA adapters for pecha renders",
+        add_help=add_help,
+    )
+    add_train_texture_lora_arguments(parser)
+    return parser
+
+
+def create_texture_augment_parser(add_help: bool = True):
+    """Create parser for SDXL texture augmentation with Canny ControlNet."""
+    parser = argparse.ArgumentParser(
+        description="Run structure-preserving texture augmentation on synthetic renders",
+        add_help=add_help,
+    )
+    add_texture_augment_arguments(parser)
+    return parser

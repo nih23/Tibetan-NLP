@@ -49,6 +49,17 @@ TRANSFORMER_PARSERS = [
     "mineru25",
 ]
 
+VLM_VRAM_HINTS: Dict[str, str] = {
+    "paddleocr_vl": "~10-16 GB",
+    "qwen25vl": "~14-24 GB",
+    "granite_docling": "~4-8 GB",
+    "deepseek_ocr": "~10-20 GB",
+    "qwen3_vl": "~16-32 GB",
+    "groundingdino": "~6-10 GB",
+    "florence2": "~8-16 GB",
+    "mineru25": "CLI backend, GPU optional",
+}
+
 
 def _run_cmd(cmd: List[str], timeout: int = 3600) -> Tuple[bool, str]:
     try:
@@ -586,10 +597,11 @@ def _format_vlm_parser_choices() -> List[str]:
     labels: List[str] = []
     for key in TRANSFORMER_PARSERS:
         spec = specs.get(key)
+        hint = VLM_VRAM_HINTS.get(key, "unknown")
         if spec is None:
-            labels.append(key)
+            labels.append(f"{key} (VRAM: {hint})")
         else:
-            labels.append(f"{key} - {spec.display_name}")
+            labels.append(f"{key} - {spec.display_name} (VRAM: {hint})")
     return labels
 
 
@@ -1183,8 +1195,13 @@ def preview_downloaded_image(output_dir: str, image_name: str):
     return img, f"Loaded {p.name}"
 
 
-def run_vlm_on_ppn_list(
+def run_layout_on_ppn_list(
     ppn_list_text: str,
+    analysis_mode: str,
+    model_path: str,
+    conf: float,
+    imgsz: int,
+    device: str,
     parser_choice: str,
     prompt: str,
     hf_model_id: str,
@@ -1207,14 +1224,28 @@ def run_vlm_on_ppn_list(
     if not ppns:
         return "Please provide at least one PPN.", "", ""
 
+    use_yolo = str(analysis_mode).startswith("YOLO")
     parser_key = _extract_parser_key(parser_choice)
-    try:
-        from tibetan_utils.parsers import parser_availability
-        ok, reason = parser_availability(parser_key)
-        if not ok:
-            return f"Backend `{parser_key}` unavailable: {reason}", "", ""
-    except Exception as exc:
-        return f"Availability check failed: {type(exc).__name__}: {exc}", "", ""
+
+    backend = None
+    yolo_model = None
+
+    if use_yolo:
+        model_file = Path(model_path).expanduser().resolve()
+        if not model_file.exists():
+            return f"YOLO model not found: {model_file}", "", ""
+        try:
+            yolo_model = _load_yolo_model(str(model_file))
+        except Exception as exc:
+            return f"Could not load YOLO model: {type(exc).__name__}: {exc}", "", ""
+    else:
+        try:
+            from tibetan_utils.parsers import parser_availability
+            ok, reason = parser_availability(parser_key)
+            if not ok:
+                return f"Backend `{parser_key}` unavailable: {reason}", "", ""
+        except Exception as exc:
+            return f"Availability check failed: {type(exc).__name__}: {exc}", "", ""
 
     out_root = Path(output_dataset_root).expanduser().resolve()
     split_dir = out_root / "test"
@@ -1233,16 +1264,17 @@ def run_vlm_on_ppn_list(
         encoding="utf-8",
     )
 
-    backend = _build_vlm_backend(
-        parser_key=parser_key,
-        hf_model_id=(hf_model_id or "").strip(),
-        prompt=(prompt or "").strip(),
-        max_new_tokens=int(max_new_tokens),
-        hf_device=(hf_device or "auto").strip(),
-        hf_dtype=(hf_dtype or "auto").strip(),
-        mineru_command=(mineru_command or "mineru").strip(),
-        mineru_timeout=int(mineru_timeout),
-    )
+    if not use_yolo:
+        backend = _build_vlm_backend(
+            parser_key=parser_key,
+            hf_model_id=(hf_model_id or "").strip(),
+            prompt=(prompt or "").strip(),
+            max_new_tokens=int(max_new_tokens),
+            hf_device=(hf_device or "auto").strip(),
+            hf_dtype=(hf_dtype or "auto").strip(),
+            mineru_command=(mineru_command or "mineru").strip(),
+            mineru_timeout=int(mineru_timeout),
+        )
 
     verify_ssl = not no_ssl_verify
     processed = 0
@@ -1276,9 +1308,46 @@ def run_vlm_on_ppn_list(
                     dst = src
 
                 img = np.array(Image.open(dst).convert("RGB"))
-                doc = backend.parse(img, output_dir=None, image_name=dst.name)
-                out = doc.to_dict()
-                detections = out.get("detections", [])
+                if use_yolo:
+                    kwargs: Dict[str, Any] = {"conf": float(conf), "imgsz": int(imgsz)}
+                    if (device or "").strip():
+                        kwargs["device"] = (device or "").strip()
+                    results = yolo_model.predict(source=img, **kwargs)
+                    detections = []
+                    h, w = img.shape[:2]
+                    for res in results:
+                        if not hasattr(res, "boxes") or res.boxes is None:
+                            continue
+                        boxes = res.boxes
+                        xyxy = boxes.xyxy.cpu().numpy() if hasattr(boxes, "xyxy") else []
+                        confs = boxes.conf.cpu().numpy() if hasattr(boxes, "conf") else []
+                        clss = boxes.cls.cpu().numpy() if hasattr(boxes, "cls") else []
+                        for i in range(len(xyxy)):
+                            x1, y1, x2, y2 = [float(v) for v in xyxy[i]]
+                            c = float(confs[i]) if i < len(confs) else 0.0
+                            cls = int(clss[i]) if i < len(clss) else 1
+                            detections.append({
+                                "class": cls,
+                                "label": f"class_{cls}",
+                                "confidence": c,
+                                "text": "",
+                                "box": {
+                                    "x": (x1 + x2) / 2.0,
+                                    "y": (y1 + y2) / 2.0,
+                                    "width": max(1.0, x2 - x1),
+                                    "height": max(1.0, y2 - y1),
+                                },
+                            })
+                    out = {
+                        "image_name": dst.name,
+                        "parser": "yolo_pretrained",
+                        "detections": detections,
+                        "metadata": {"model_path": str(model_file)},
+                    }
+                else:
+                    doc = backend.parse(img, output_dir=None, image_name=dst.name)
+                    out = doc.to_dict()
+                    detections = out.get("detections", [])
 
                 yolo_lines: List[str] = []
                 h, w = img.shape[:2]
@@ -1310,6 +1379,7 @@ def run_vlm_on_ppn_list(
     summary = (
         f"Processed images: {processed}\n"
         f"Failed images: {failed}\n"
+        f"Label backend: {'YOLO pretrained' if use_yolo else parser_key}\n"
         f"Output test split: {split_dir}\n"
         "Note: SBB data is stored as TEST-only (split=test), not train/val."
     )
@@ -1582,6 +1652,21 @@ def build_ui() -> gr.Blocks:
             )
             with gr.Row():
                 with gr.Column(scale=1):
+                    batch_analysis_mode = gr.Radio(
+                        choices=["VLM", "YOLO (pretrained)"],
+                        value="VLM",
+                        label="Batch Labeling Backend",
+                    )
+                    with gr.Row():
+                        batch_models_dir = gr.Textbox(label="models_dir (YOLO)", value=str((ROOT / "models").resolve()))
+                        batch_scan_models_btn = gr.Button("Scan models/")
+                    batch_model_select = gr.Dropdown(label="Pretrained Model (YOLO)", choices=[])
+                    batch_model_scan_msg = gr.Textbox(label="Model Scan Status", interactive=False)
+                    with gr.Row():
+                        batch_yolo_conf = gr.Slider(0.01, 0.99, value=0.25, step=0.01, label="conf (YOLO)")
+                        batch_yolo_imgsz = gr.Number(label="imgsz (YOLO)", value=1024, precision=0)
+                    batch_yolo_device = gr.Textbox(label="device (YOLO)", value="cuda:0")
+
                     batch_vlm_parser = gr.Dropdown(
                         label="Parser Backend",
                         choices=vlm_choices,
@@ -1614,16 +1699,27 @@ def build_ui() -> gr.Blocks:
                         batch_vlm_ppn_max_images = gr.Number(label="max_images_per_ppn (0=all)", value=5, precision=0)
                         batch_vlm_ppn_no_ssl = gr.Checkbox(label="no_ssl_verify", value=False)
                     batch_vlm_ppn_save_overlays = gr.Checkbox(label="save_overlays", value=True)
-                    batch_vlm_ppn_run_btn = gr.Button("Run VLM on PPN List", variant="primary")
+                    batch_vlm_ppn_run_btn = gr.Button("Run Batch Labeling on PPN List", variant="primary")
 
             batch_vlm_ppn_summary = gr.Textbox(label="Batch Status", lines=8, interactive=False)
             batch_vlm_ppn_test_split = gr.Textbox(label="Generated SBB Test Split", interactive=False)
             batch_vlm_ppn_logs = gr.Textbox(label="Batch Logs", lines=10, interactive=False)
 
+            batch_scan_models_btn.click(
+                fn=scan_pretrained_models,
+                inputs=[batch_models_dir],
+                outputs=[batch_model_select, batch_model_scan_msg],
+            )
+
             batch_vlm_ppn_run_btn.click(
-                fn=run_vlm_on_ppn_list,
+                fn=run_layout_on_ppn_list,
                 inputs=[
                     batch_vlm_ppn_list,
+                    batch_analysis_mode,
+                    batch_model_select,
+                    batch_yolo_conf,
+                    batch_yolo_imgsz,
+                    batch_yolo_device,
                     batch_vlm_parser,
                     batch_vlm_prompt,
                     batch_vlm_hf_model,
