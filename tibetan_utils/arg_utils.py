@@ -336,6 +336,9 @@ def add_prepare_texture_lora_dataset_arguments(parser):
 
 def add_train_texture_lora_arguments(parser):
     """Arguments for SDXL texture LoRA training."""
+    parser.add_argument('--model_family', type=str, default='sdxl',
+                       choices=['sdxl', 'sd21'],
+                       help='Model family to train LoRA for')
     parser.add_argument('--dataset_dir', type=str, required=True,
                        help='Folder containing texture crops (or an "images/" subfolder)')
     parser.add_argument('--output_dir', type=str, required=True,
@@ -363,7 +366,7 @@ def add_train_texture_lora_arguments(parser):
                        help='Random seed for deterministic training')
     parser.add_argument('--base_model_id', type=str,
                        default='stabilityai/stable-diffusion-xl-base-1.0',
-                       help='Base SDXL model ID')
+                       help='Base model ID (SDXL or SD2.1 depending on --model_family)')
     parser.add_argument('--train_text_encoder', action='store_true',
                        help='Also train text encoder LoRA adapters (off by default)')
     parser.add_argument('--num_workers', type=int, default=4,
@@ -374,6 +377,9 @@ def add_train_texture_lora_arguments(parser):
 
 def add_texture_augment_arguments(parser):
     """Arguments for SDXL + ControlNet texture augmentation."""
+    parser.add_argument('--model_family', type=str, default='sdxl',
+                       choices=['sdxl', 'sd21'],
+                       help='Model family for inference')
     parser.add_argument('--input_dir', type=str, required=True,
                        help='Folder with synthetic input images')
     parser.add_argument('--output_dir', type=str, required=True,
@@ -396,7 +402,7 @@ def add_texture_augment_arguments(parser):
                        help='Prompt for texture transfer (can be empty)')
     parser.add_argument('--base_model_id', type=str,
                        default='stabilityai/stable-diffusion-xl-base-1.0',
-                       help='Base SDXL model ID')
+                       help='Base model ID (SDXL or SD2.1 depending on --model_family)')
     parser.add_argument('--controlnet_model_id', type=str,
                        default='diffusers/controlnet-canny-sdxl-1.0',
                        help='SDXL ControlNet Canny model ID')

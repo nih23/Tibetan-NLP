@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
-"""Texture augmentation with SDXL + ControlNet Canny (+ optional LoRA)."""
+"""Texture augmentation with SDXL/SD2.1 + ControlNet Canny (+ optional LoRA)."""
 
 from __future__ import annotations
 
 import logging
 import sys
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 import numpy as np
 import torch
 from PIL import Image
 from tqdm.auto import tqdm
 
-from diffusers import ControlNetModel, StableDiffusionXLControlNetImg2ImgPipeline
+from diffusers import (
+    ControlNetModel,
+    StableDiffusionControlNetImg2ImgPipeline,
+    StableDiffusionXLControlNetImg2ImgPipeline,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -23,6 +27,10 @@ from tibetan_utils.arg_utils import create_texture_augment_parser
 
 LOGGER = logging.getLogger("texture_augment")
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
+SDXL_DEFAULT = "stabilityai/stable-diffusion-xl-base-1.0"
+SD21_DEFAULT = "stabilityai/stable-diffusion-2-1-base"
+SDXL_CTRL_DEFAULT = "diffusers/controlnet-canny-sdxl-1.0"
+SD21_CTRL_DEFAULT = "thibaud/controlnet-sd21-canny-diffusers"
 
 try:
     import cv2
@@ -31,16 +39,29 @@ except ImportError as exc:  # pragma: no cover
 
 
 def _configure_logging() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
-    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+
+
+def _resolve_model_ids(args) -> Tuple[str, str]:
+    base_id = (args.base_model_id or "").strip()
+    ctrl_id = (args.controlnet_model_id or "").strip()
+
+    if args.model_family == "sd21":
+        if not base_id or base_id == SDXL_DEFAULT:
+            base_id = SD21_DEFAULT
+        if not ctrl_id or ctrl_id == SDXL_CTRL_DEFAULT:
+            ctrl_id = SD21_CTRL_DEFAULT
+        return base_id, ctrl_id
+
+    if not base_id:
+        base_id = SDXL_DEFAULT
+    if not ctrl_id:
+        ctrl_id = SDXL_CTRL_DEFAULT
+    return base_id, ctrl_id
 
 
 def _list_images(input_dir: Path) -> List[Path]:
-    return sorted(
-        p for p in input_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-    )
+    return sorted(p for p in input_dir.rglob("*") if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS)
 
 
 def _device_and_dtype() -> tuple[torch.device, torch.dtype]:
@@ -59,21 +80,25 @@ def _compute_canny_condition(image: Image.Image, canny_low: int, canny_high: int
     return Image.fromarray(edge_rgb)
 
 
-def _load_pipeline(args, device: torch.device, dtype: torch.dtype):
-    LOGGER.info("Loading ControlNet model: %s", args.controlnet_model_id)
-    controlnet = ControlNetModel.from_pretrained(
-        args.controlnet_model_id,
-        torch_dtype=dtype,
-        use_safetensors=True,
-    )
+def _load_pipeline(args, base_model_id: str, controlnet_model_id: str, device: torch.device, dtype: torch.dtype):
+    LOGGER.info("Loading ControlNet model: %s", controlnet_model_id)
+    controlnet = ControlNetModel.from_pretrained(controlnet_model_id, torch_dtype=dtype, use_safetensors=True)
 
-    LOGGER.info("Loading SDXL base model: %s", args.base_model_id)
-    pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
-        args.base_model_id,
-        controlnet=controlnet,
-        torch_dtype=dtype,
-        use_safetensors=True,
-    )
+    LOGGER.info("Loading base model (%s): %s", args.model_family, base_model_id)
+    if args.model_family == "sd21":
+        pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
+            base_model_id,
+            controlnet=controlnet,
+            torch_dtype=dtype,
+            use_safetensors=True,
+        )
+    else:
+        pipe = StableDiffusionXLControlNetImg2ImgPipeline.from_pretrained(
+            base_model_id,
+            controlnet=controlnet,
+            torch_dtype=dtype,
+            use_safetensors=True,
+        )
 
     if args.lora_path:
         lora_path = Path(args.lora_path).expanduser().resolve()
@@ -98,6 +123,9 @@ def _load_pipeline(args, device: torch.device, dtype: torch.dtype):
 def run(args) -> dict:
     _configure_logging()
 
+    if args.model_family not in {"sdxl", "sd21"}:
+        raise ValueError("model_family must be one of: sdxl, sd21")
+
     input_dir = Path(args.input_dir).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
 
@@ -116,10 +144,17 @@ def run(args) -> dict:
     if strength != args.strength:
         LOGGER.warning("Clamped strength from %s to %s for geometry preservation", args.strength, strength)
 
+    base_model_id, controlnet_model_id = _resolve_model_ids(args)
     device, dtype = _device_and_dtype()
-    LOGGER.info("Using device=%s dtype=%s", device, dtype)
+    LOGGER.info("Using device=%s dtype=%s family=%s", device, dtype, args.model_family)
 
-    pipe = _load_pipeline(args=args, device=device, dtype=dtype)
+    pipe = _load_pipeline(
+        args=args,
+        base_model_id=base_model_id,
+        controlnet_model_id=controlnet_model_id,
+        device=device,
+        dtype=dtype,
+    )
 
     if args.seed is not None:
         torch.manual_seed(args.seed)
@@ -135,11 +170,7 @@ def run(args) -> dict:
 
         with Image.open(input_path) as image:
             image = image.convert("RGB")
-            control_image = _compute_canny_condition(
-                image=image,
-                canny_low=args.canny_low,
-                canny_high=args.canny_high,
-            )
+            control_image = _compute_canny_condition(image=image, canny_low=args.canny_low, canny_high=args.canny_high)
 
             generator = None
             if args.seed is not None:
@@ -174,6 +205,9 @@ def run(args) -> dict:
     return {
         "images_processed": generated,
         "output_dir": str(output_dir),
+        "model_family": args.model_family,
+        "base_model_id": base_model_id,
+        "controlnet_model_id": controlnet_model_id,
     }
 
 

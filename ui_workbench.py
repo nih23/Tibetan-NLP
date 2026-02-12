@@ -548,6 +548,7 @@ def preview_latest_texture_output(output_dir: str):
 def run_texture_augment_live(
     input_dir: str,
     output_dir: str,
+    model_family: str,
     strength: float,
     steps: int,
     guidance_scale: float,
@@ -591,6 +592,8 @@ def run_texture_augment_live(
         sys.executable,
         "-u",
         str(script_path),
+        "--model_family",
+        (model_family or "sdxl").strip(),
         "--input_dir",
         str(in_dir),
         "--output_dir",
@@ -654,7 +657,7 @@ def run_texture_augment_live(
 
     preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
     yield (
-        "Running SDXL texture augmentation ...\n"
+        f"Running {str(model_family).upper()} texture augmentation ...\\n"
         f"Input dir: {in_dir}\n"
         f"Output dir: {out_dir}\n"
         f"Command: {shlex.join(cmd)}\n",
@@ -697,7 +700,7 @@ def run_texture_augment_live(
             if stream_failed and stream_fail_msg:
                 tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
             running_msg = (
-                "Running SDXL texture augmentation ...\n"
+                f"Running {str(model_family).upper()} texture augmentation ...\\n"
                 f"Input dir: {in_dir}\n"
                 f"Output dir: {out_dir}\n\n{tail}"
             )
@@ -905,6 +908,7 @@ def run_prepare_texture_lora_dataset_live(
 def run_train_texture_lora_live(
     dataset_dir: str,
     output_dir: str,
+    model_family: str,
     resolution: int,
     batch_size: int,
     lr: float,
@@ -950,6 +954,8 @@ def run_train_texture_lora_live(
         sys.executable,
         "-u",
         str(script_path),
+        "--model_family",
+        (model_family or "sdxl").strip(),
         "--dataset_dir",
         str(dataset_path),
         "--output_dir",
@@ -2213,7 +2219,7 @@ def build_ui() -> gr.Blocks:
                 "7. VLM Layout: Run transformer-based layout parsing on a single image.\n"
                 "8. Label Studio Export: Convert YOLO split folders to Label Studio tasks and launch Label Studio.\n"
                 "9. PPN Downloader: Download and analyze SBB images.\n"
-                "10. Diffusion + LoRA: Prepare texture crops, train LoRA, and run SDXL + ControlNet inference.\n"
+                "10. Diffusion + LoRA: Prepare texture crops, train LoRA, and run SDXL/SD2.1 + ControlNet inference.\n"
                 "11. CLI Audit: Show all CLI options from project scripts."
             )
 
@@ -2781,7 +2787,7 @@ def build_ui() -> gr.Blocks:
                 "End-to-end texture workflow: "
                 "A) prepare LoRA crop dataset from real/SBB pages, "
                 "B) train a texture LoRA, "
-                "C) run SDXL + ControlNet Canny inference with optional pre-trained LoRA."
+                "C) run SDXL or SD2.1 + ControlNet Canny inference with optional pre-trained LoRA."
             )
             gr.Markdown("### A) Prepare Texture LoRA Dataset (from SBB / real pecha pages)")
             with gr.Row():
@@ -2814,6 +2820,11 @@ def build_ui() -> gr.Blocks:
                 with gr.Column(scale=1):
                     train_texture_dataset_dir = gr.Textbox(label="dataset_dir", value=default_texture_lora_dataset_dir)
                     train_texture_output_dir = gr.Textbox(label="output_dir", value=default_texture_lora_output_dir)
+                    train_texture_model_family = gr.Dropdown(
+                        choices=["sdxl", "sd21"],
+                        value="sdxl",
+                        label="model_family",
+                    )
                     with gr.Row():
                         train_texture_resolution = gr.Number(label="resolution", value=1024, precision=0)
                         train_texture_batch_size = gr.Number(label="batch_size", value=1, precision=0)
@@ -2852,6 +2863,11 @@ def build_ui() -> gr.Blocks:
                 with gr.Column(scale=1):
                     diff_input_dir = gr.Textbox(label="input_dir (synthetic renders)", value=default_texture_input_dir)
                     diff_output_dir = gr.Textbox(label="output_dir", value=default_texture_output_dir)
+                    diff_model_family = gr.Dropdown(
+                        choices=["sdxl", "sd21"],
+                        value="sdxl",
+                        label="model_family",
+                    )
                     diff_prompt = gr.Textbox(
                         label="prompt",
                         value="scanned printed page",
@@ -2922,6 +2938,7 @@ def build_ui() -> gr.Blocks:
                 inputs=[
                     train_texture_dataset_dir,
                     train_texture_output_dir,
+                    train_texture_model_family,
                     train_texture_resolution,
                     train_texture_batch_size,
                     train_texture_lr,
@@ -2945,6 +2962,7 @@ def build_ui() -> gr.Blocks:
                 inputs=[
                     diff_input_dir,
                     diff_output_dir,
+                    diff_model_family,
                     diff_strength,
                     diff_steps,
                     diff_guidance_scale,
