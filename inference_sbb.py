@@ -82,13 +82,13 @@ def main():
     predict_args = {
         'imgsz': args.imgsz,
         'conf': args.conf,
-        'device': args.device,
-        'save': args.save,
-        'project': args.project,
-        'name': args.name,
-        'show': args.show,
-        'save_txt': args.save_txt,
-        'save_conf': args.save_conf
+        'device': getattr(args, 'device', ''),
+        'save': getattr(args, 'save', True),
+        'project': getattr(args, 'project', 'runs/detect'),
+        'name': getattr(args, 'name', 'predict'),
+        'show': getattr(args, 'show', False),
+        'save_txt': getattr(args, 'save_txt', False),
+        'save_conf': getattr(args, 'save_conf', False)
     }
     
     # Process images
