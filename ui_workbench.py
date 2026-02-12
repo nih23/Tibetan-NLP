@@ -1709,6 +1709,15 @@ def run_trained_model_inference(
         overlay = Image.fromarray(image.astype(np.uint8)).convert("RGB")
         draw = ImageDraw.Draw(overlay)
         detections = []
+        # Stable per-class colors for clearer overlays.
+        base_class_colors = {
+            0: (255, 140, 0),
+            1: (0, 220, 255),
+            2: (130, 255, 130),
+            3: (255, 100, 180),
+            4: (200, 180, 255),
+            5: (255, 220, 120),
+        }
 
         for res in results:
             if not hasattr(res, "boxes") or res.boxes is None:
@@ -1717,18 +1726,36 @@ def run_trained_model_inference(
             xyxy = boxes.xyxy.cpu().numpy() if hasattr(boxes, "xyxy") else []
             confs = boxes.conf.cpu().numpy() if hasattr(boxes, "conf") else []
             clss = boxes.cls.cpu().numpy() if hasattr(boxes, "cls") else []
+            names = getattr(res, "names", None) or getattr(model, "names", None) or {}
             for i in range(len(xyxy)):
                 x1, y1, x2, y2 = [int(v) for v in xyxy[i]]
                 c = float(confs[i]) if i < len(confs) else 0.0
                 cls = int(clss[i]) if i < len(clss) else 0
+                if isinstance(names, dict):
+                    class_name = str(names.get(cls, f"class_{cls}"))
+                elif isinstance(names, list) and 0 <= cls < len(names):
+                    class_name = str(names[cls])
+                else:
+                    class_name = f"class_{cls}"
                 detections.append({
                     "class": cls,
+                    "label": class_name,
                     "confidence": c,
                     "box": [x1, y1, x2, y2],
                 })
-                color = (0, 220, 255)
+                if cls in base_class_colors:
+                    color = base_class_colors[cls]
+                else:
+                    color = (
+                        60 + ((cls * 67) % 180),
+                        60 + ((cls * 97) % 180),
+                        60 + ((cls * 131) % 180),
+                    )
                 draw.rectangle((x1, y1, x2, y2), outline=color, width=3)
-                draw.text((x1 + 2, max(0, y1 - 14)), f"{cls}:{c:.2f}", fill=color)
+                tag = f"{class_name} ({cls}): {c:.2f}"
+                tx, ty = x1 + 2, max(0, y1 - 16)
+                draw.rectangle((tx, ty, tx + 9 * len(tag), ty + 14), fill=(0, 0, 0))
+                draw.text((tx + 2, ty + 1), tag, fill=color)
 
         status = f"{len(detections)} detections"
         return np.array(overlay), status, json.dumps(detections, ensure_ascii=False, indent=2)
