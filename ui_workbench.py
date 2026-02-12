@@ -211,7 +211,7 @@ def _draw_yolo_boxes(image_path: Path, label_path: Path) -> Tuple[np.ndarray, st
             with Image.open(image_path) as im:
                 img = im.convert("RGB")
             break
-        except OSError as exc:
+        except (OSError, SyntaxError, ValueError) as exc:
             last_err = exc
             time.sleep(0.08)
 
@@ -532,7 +532,7 @@ def _latest_image_from_folder(folder: str) -> Tuple[Optional[np.ndarray], str]:
                     arr = np.array(im.convert("RGB"))
                 rel = image_path.relative_to(out_dir)
                 return arr, f"Latest output: {rel}"
-            except OSError as exc:
+            except (OSError, SyntaxError, ValueError) as exc:
                 last_err = exc
                 time.sleep(0.08)
         if last_err is not None:
@@ -731,6 +731,368 @@ def run_texture_augment_live(
         + _tail_lines_newest_first(log_lines, 3000)
     )
     yield final_msg, preview_img, preview_txt
+
+
+def run_prepare_texture_lora_dataset_live(
+    input_dir: str,
+    output_dir: str,
+    crop_size: int,
+    num_crops_per_page: int,
+    min_edge_density: float,
+    seed: Optional[int],
+    canny_low: int,
+    canny_high: int,
+):
+    in_dir = Path(input_dir).expanduser().resolve()
+    out_dir = Path(output_dir).expanduser().resolve()
+    script_path = ROOT / "scripts" / "prepare_texture_lora_dataset.py"
+    preview_root = out_dir / "images"
+
+    if not script_path.exists():
+        msg = f"Failed: script not found: {script_path}"
+        preview_img, preview_txt = _latest_image_from_folder(str(preview_root))
+        yield msg, preview_img, preview_txt, str(out_dir)
+        return
+    if not in_dir.exists() or not in_dir.is_dir():
+        msg = f"Failed: input_dir does not exist: {in_dir}"
+        preview_img, preview_txt = _latest_image_from_folder(str(preview_root))
+        yield msg, preview_img, preview_txt, str(out_dir)
+        return
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    seed_arg = 42
+    try:
+        if seed is not None:
+            seed_arg = int(float(seed))
+    except Exception:
+        seed_arg = 42
+
+    cmd = [
+        sys.executable,
+        "-u",
+        str(script_path),
+        "--input_dir",
+        str(in_dir),
+        "--output_dir",
+        str(out_dir),
+        "--crop_size",
+        str(int(crop_size)),
+        "--num_crops_per_page",
+        str(int(num_crops_per_page)),
+        "--min_edge_density",
+        str(float(min_edge_density)),
+        "--seed",
+        str(seed_arg),
+        "--canny_low",
+        str(int(canny_low)),
+        "--canny_high",
+        str(int(canny_high)),
+    ]
+
+    try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0,
+        )
+    except Exception as exc:
+        msg = f"Failed\nOutput dir: {out_dir}\n\n{type(exc).__name__}: {exc}"
+        preview_img, preview_txt = _latest_image_from_folder(str(preview_root))
+        yield msg, preview_img, preview_txt, str(out_dir)
+        return
+
+    if proc.stdout is not None:
+        try:
+            os.set_blocking(proc.stdout.fileno(), False)
+        except Exception:
+            pass
+
+    log_lines: List[str] = []
+    partial = ""
+    last_emit_ts = 0.0
+    stream_failed = False
+    stream_fail_msg = ""
+
+    preview_img, preview_txt = _latest_image_from_folder(str(preview_root))
+    yield (
+        "Preparing texture LoRA dataset ...\n"
+        f"Input dir: {in_dir}\n"
+        f"Output dir: {out_dir}\n"
+        f"Command: {shlex.join(cmd)}\n",
+        preview_img,
+        preview_txt,
+        str(out_dir),
+    )
+
+    while True:
+        got_output = False
+        if (not stream_failed) and proc.stdout is not None:
+            try:
+                chunk = proc.stdout.read()
+            except BlockingIOError:
+                chunk = b""
+            except Exception as exc:
+                stream_failed = True
+                stream_fail_msg = f"stdout stream disabled ({type(exc).__name__}: {exc})"
+                chunk = b""
+
+            if chunk:
+                got_output = True
+                if isinstance(chunk, bytes):
+                    chunk_text = chunk.decode("utf-8", errors="replace")
+                else:
+                    chunk_text = str(chunk)
+                partial += chunk_text.replace("\r", "\n")
+                parts = partial.splitlines(keepends=True)
+                keep = ""
+                for piece in parts:
+                    if piece.endswith("\n"):
+                        log_lines.append(piece.rstrip("\n"))
+                    else:
+                        keep = piece
+                partial = keep
+
+        now = time.time()
+        if now - last_emit_ts >= 1.0:
+            preview_img, preview_txt = _latest_image_from_folder(str(preview_root))
+            tail = _tail_lines_newest_first(log_lines, 800)
+            if stream_failed and stream_fail_msg:
+                tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
+            running_msg = (
+                "Preparing texture LoRA dataset ...\n"
+                f"Input dir: {in_dir}\n"
+                f"Output dir: {out_dir}\n\n{tail}"
+            )
+            yield running_msg, preview_img, preview_txt, str(out_dir)
+            last_emit_ts = now
+
+        if proc.poll() is not None:
+            break
+
+        if not got_output:
+            time.sleep(0.15)
+
+    if proc.stdout is not None:
+        try:
+            rest = proc.stdout.read()
+        except Exception:
+            rest = b""
+        if rest:
+            if isinstance(rest, bytes):
+                partial += rest.decode("utf-8", errors="replace").replace("\r", "\n")
+            else:
+                partial += str(rest).replace("\r", "\n")
+        if partial:
+            log_lines.extend(partial.splitlines())
+
+    ok = proc.returncode == 0
+    status = "Success" if ok else "Failed"
+    preview_img, preview_txt = _latest_image_from_folder(str(preview_root))
+    final_msg = (
+        f"{status}\nInput dir: {in_dir}\nOutput dir: {out_dir}\n\n"
+        + _tail_lines_newest_first(log_lines, 3000)
+    )
+    yield final_msg, preview_img, preview_txt, str(out_dir)
+
+
+def run_train_texture_lora_live(
+    dataset_dir: str,
+    output_dir: str,
+    resolution: int,
+    batch_size: int,
+    lr: float,
+    max_train_steps: int,
+    rank: int,
+    lora_alpha: float,
+    mixed_precision: str,
+    gradient_checkpointing: bool,
+    prompt: str,
+    seed: Optional[int],
+    base_model_id: str,
+    train_text_encoder: bool,
+    num_workers: int,
+    lora_weights_name: str,
+):
+    dataset_path = Path(dataset_dir).expanduser().resolve()
+    output_path = Path(output_dir).expanduser().resolve()
+    script_path = ROOT / "scripts" / "train_texture_lora_sdxl.py"
+
+    lora_name = (lora_weights_name or "texture_lora.safetensors").strip()
+    expected_lora_path = output_path / lora_name
+    expected_cfg_path = output_path / "training_config.json"
+
+    if not script_path.exists():
+        msg = f"Failed: script not found: {script_path}"
+        yield msg, str(expected_lora_path), str(expected_cfg_path), str(expected_lora_path)
+        return
+    if not dataset_path.exists() or not dataset_path.is_dir():
+        msg = f"Failed: dataset_dir does not exist: {dataset_path}"
+        yield msg, str(expected_lora_path), str(expected_cfg_path), str(expected_lora_path)
+        return
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    seed_arg = 42
+    try:
+        if seed is not None:
+            seed_arg = int(float(seed))
+    except Exception:
+        seed_arg = 42
+
+    cmd = [
+        sys.executable,
+        "-u",
+        str(script_path),
+        "--dataset_dir",
+        str(dataset_path),
+        "--output_dir",
+        str(output_path),
+        "--resolution",
+        str(int(resolution)),
+        "--batch_size",
+        str(int(batch_size)),
+        "--lr",
+        str(float(lr)),
+        "--max_train_steps",
+        str(int(max_train_steps)),
+        "--rank",
+        str(int(rank)),
+        "--lora_alpha",
+        str(float(lora_alpha)),
+        "--mixed_precision",
+        (mixed_precision or "fp16").strip(),
+        "--prompt",
+        (prompt or "").strip(),
+        "--seed",
+        str(seed_arg),
+        "--base_model_id",
+        (base_model_id or "stabilityai/stable-diffusion-xl-base-1.0").strip(),
+        "--num_workers",
+        str(int(num_workers)),
+        "--lora_weights_name",
+        lora_name,
+    ]
+    if gradient_checkpointing:
+        cmd.append("--gradient_checkpointing")
+    if train_text_encoder:
+        cmd.append("--train_text_encoder")
+
+    try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0,
+        )
+    except Exception as exc:
+        msg = f"Failed\nOutput dir: {output_path}\n\n{type(exc).__name__}: {exc}"
+        yield msg, str(expected_lora_path), str(expected_cfg_path), str(expected_lora_path)
+        return
+
+    if proc.stdout is not None:
+        try:
+            os.set_blocking(proc.stdout.fileno(), False)
+        except Exception:
+            pass
+
+    log_lines: List[str] = []
+    partial = ""
+    last_emit_ts = 0.0
+    stream_failed = False
+    stream_fail_msg = ""
+
+    yield (
+        "Training texture LoRA ...\n"
+        f"Dataset dir: {dataset_path}\n"
+        f"Output dir: {output_path}\n"
+        f"Expected LoRA: {expected_lora_path}\n"
+        f"Command: {shlex.join(cmd)}\n",
+        str(expected_lora_path),
+        str(expected_cfg_path),
+        str(expected_lora_path),
+    )
+
+    while True:
+        got_output = False
+        if (not stream_failed) and proc.stdout is not None:
+            try:
+                chunk = proc.stdout.read()
+            except BlockingIOError:
+                chunk = b""
+            except Exception as exc:
+                stream_failed = True
+                stream_fail_msg = f"stdout stream disabled ({type(exc).__name__}: {exc})"
+                chunk = b""
+
+            if chunk:
+                got_output = True
+                if isinstance(chunk, bytes):
+                    chunk_text = chunk.decode("utf-8", errors="replace")
+                else:
+                    chunk_text = str(chunk)
+                partial += chunk_text.replace("\r", "\n")
+                parts = partial.splitlines(keepends=True)
+                keep = ""
+                for piece in parts:
+                    if piece.endswith("\n"):
+                        log_lines.append(piece.rstrip("\n"))
+                    else:
+                        keep = piece
+                partial = keep
+
+        now = time.time()
+        if now - last_emit_ts >= 1.0:
+            tail = _tail_lines_newest_first(log_lines, 800)
+            if stream_failed and stream_fail_msg:
+                tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
+            running_msg = (
+                "Training texture LoRA ...\n"
+                f"Dataset dir: {dataset_path}\n"
+                f"Output dir: {output_path}\n"
+                f"Expected LoRA: {expected_lora_path}\n\n{tail}"
+            )
+            yield running_msg, str(expected_lora_path), str(expected_cfg_path), str(expected_lora_path)
+            last_emit_ts = now
+
+        if proc.poll() is not None:
+            break
+
+        if not got_output:
+            time.sleep(0.15)
+
+    if proc.stdout is not None:
+        try:
+            rest = proc.stdout.read()
+        except Exception:
+            rest = b""
+        if rest:
+            if isinstance(rest, bytes):
+                partial += rest.decode("utf-8", errors="replace").replace("\r", "\n")
+            else:
+                partial += str(rest).replace("\r", "\n")
+        if partial:
+            log_lines.extend(partial.splitlines())
+
+    ok = proc.returncode == 0
+    status = "Success" if ok else "Failed"
+    final_msg = (
+        f"{status}\nDataset dir: {dataset_path}\nOutput dir: {output_path}\n"
+        f"LoRA path: {expected_lora_path}\n\n"
+        + _tail_lines_newest_first(log_lines, 3000)
+    )
+    yield final_msg, str(expected_lora_path), str(expected_cfg_path), str(expected_lora_path)
 
 
 def refresh_image_list(dataset_dir: str, split: str):
@@ -1781,6 +2143,9 @@ def build_ui() -> gr.Blocks:
     default_split_dir = str((ROOT / "datasets" / "tibetan-yolo" / "train").resolve())
     default_texture_input_dir = str((ROOT / "datasets" / "tibetan-yolo-ui" / "train" / "images").resolve())
     default_texture_output_dir = str((ROOT / "datasets" / "tibetan-yolo-ui-textured").resolve())
+    default_texture_real_pages_dir = str((ROOT / "sbb_images").resolve())
+    default_texture_lora_dataset_dir = str((ROOT / "datasets" / "texture-lora-dataset").resolve())
+    default_texture_lora_output_dir = str((ROOT / "models" / "texture-lora-sdxl").resolve())
     default_prompt = (
         "Extract page layout blocks and OCR text. "
         "Return strict JSON with key 'detections' containing a list of objects with: "
@@ -1821,7 +2186,7 @@ def build_ui() -> gr.Blocks:
                 "7. VLM Layout: Run transformer-based layout parsing on a single image.\n"
                 "8. Label Studio Export: Convert YOLO split folders to Label Studio tasks and launch Label Studio.\n"
                 "9. PPN Downloader: Download and analyze SBB images.\n"
-                "10. Diffusion + LoRA: Run SDXL + ControlNet Canny texture augmentation with optional LoRA.\n"
+                "10. Diffusion + LoRA: Prepare texture crops, train LoRA, and run SDXL + ControlNet inference.\n"
                 "11. CLI Audit: Show all CLI options from project scripts."
             )
 
@@ -2386,12 +2751,79 @@ def build_ui() -> gr.Blocks:
         # 10) Diffusion + LoRA texture augmentation
         with gr.Tab("10. Diffusion + LoRA"):
             gr.Markdown(
-                "Apply paper/ink/scan texture using SDXL + ControlNet Canny while preserving glyph geometry. "
-                "Optionally load LoRA weights trained on real pecha crops."
+                "End-to-end texture workflow: "
+                "A) prepare LoRA crop dataset from real/SBB pages, "
+                "B) train a texture LoRA, "
+                "C) run SDXL + ControlNet Canny inference with optional pre-trained LoRA."
             )
+            gr.Markdown("### A) Prepare Texture LoRA Dataset (from SBB / real pecha pages)")
             with gr.Row():
                 with gr.Column(scale=1):
-                    diff_input_dir = gr.Textbox(label="input_dir", value=default_texture_input_dir)
+                    prep_input_dir = gr.Textbox(
+                        label="real_pages_input_dir (e.g. SBB images folder)",
+                        value=default_texture_real_pages_dir,
+                    )
+                    prep_output_dir = gr.Textbox(
+                        label="prepared_dataset_output_dir",
+                        value=default_texture_lora_dataset_dir,
+                    )
+                    with gr.Row():
+                        prep_crop_size = gr.Number(label="crop_size", value=1024, precision=0)
+                        prep_num_crops_per_page = gr.Number(label="num_crops_per_page", value=12, precision=0)
+                    with gr.Row():
+                        prep_min_edge_density = gr.Slider(0.0, 0.20, value=0.025, step=0.001, label="min_edge_density")
+                        prep_seed = gr.Number(label="seed", value=42, precision=0)
+                    with gr.Row():
+                        prep_canny_low = gr.Number(label="canny_low", value=100, precision=0)
+                        prep_canny_high = gr.Number(label="canny_high", value=200, precision=0)
+                    prep_run_btn = gr.Button("Prepare LoRA Dataset", variant="primary")
+                    prep_log = gr.Textbox(label="Prepare Log", lines=12, interactive=False)
+                with gr.Column(scale=1):
+                    prep_preview = gr.Image(type="numpy", label="Latest Prepared Crop")
+                    prep_preview_status = gr.Textbox(label="Prepare Preview Status", interactive=False)
+
+            gr.Markdown("### B) Train Texture LoRA")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    train_texture_dataset_dir = gr.Textbox(label="dataset_dir", value=default_texture_lora_dataset_dir)
+                    train_texture_output_dir = gr.Textbox(label="output_dir", value=default_texture_lora_output_dir)
+                    with gr.Row():
+                        train_texture_resolution = gr.Number(label="resolution", value=1024, precision=0)
+                        train_texture_batch_size = gr.Number(label="batch_size", value=1, precision=0)
+                    with gr.Row():
+                        train_texture_lr = gr.Number(label="lr", value=1e-4, precision=6)
+                        train_texture_steps = gr.Number(label="max_train_steps", value=1500, precision=0)
+                    with gr.Row():
+                        train_texture_rank = gr.Number(label="rank", value=16, precision=0)
+                        train_texture_alpha = gr.Number(label="lora_alpha", value=16.0, precision=2)
+                    with gr.Row():
+                        train_texture_mixed_precision = gr.Dropdown(
+                            choices=["no", "fp16", "bf16"],
+                            value="fp16",
+                            label="mixed_precision",
+                        )
+                        train_texture_workers = gr.Number(label="num_workers", value=4, precision=0)
+                    with gr.Row():
+                        train_texture_gc = gr.Checkbox(label="gradient_checkpointing", value=True)
+                        train_texture_te = gr.Checkbox(label="train_text_encoder", value=False)
+                    train_texture_prompt = gr.Textbox(label="prompt", value="scanned printed page", lines=2)
+                    with gr.Row():
+                        train_texture_seed = gr.Number(label="seed", value=42, precision=0)
+                        train_texture_lora_name = gr.Textbox(label="lora_weights_name", value="texture_lora.safetensors")
+                    train_texture_base_model = gr.Textbox(
+                        label="base_model_id",
+                        value="stabilityai/stable-diffusion-xl-base-1.0",
+                    )
+                    train_texture_run_btn = gr.Button("Train Texture LoRA", variant="primary")
+                with gr.Column(scale=1):
+                    train_texture_log = gr.Textbox(label="Train LoRA Log", lines=16, interactive=False)
+                    train_texture_lora_path = gr.Textbox(label="Trained LoRA Path", interactive=False)
+                    train_texture_cfg_path = gr.Textbox(label="Training Config Path", interactive=False)
+
+            gr.Markdown("### C) Texture Inference (use pre-trained or freshly trained LoRA)")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    diff_input_dir = gr.Textbox(label="input_dir (synthetic renders)", value=default_texture_input_dir)
                     diff_output_dir = gr.Textbox(label="output_dir", value=default_texture_output_dir)
                     diff_prompt = gr.Textbox(
                         label="prompt",
@@ -2399,7 +2831,7 @@ def build_ui() -> gr.Blocks:
                         lines=2,
                     )
                     diff_lora_path = gr.Textbox(
-                        label="lora_path (optional)",
+                        label="lora_path (optional, auto-filled after training)",
                         value="",
                         placeholder="Path to LoRA directory or *.safetensors",
                     )
@@ -2442,6 +2874,44 @@ def build_ui() -> gr.Blocks:
                     diff_preview = gr.Image(type="numpy", label="Latest Augmented Output")
                     diff_preview_status = gr.Textbox(label="Preview Status", interactive=False)
                     diff_log = gr.Textbox(label="Texture Augmentation Log", lines=20, interactive=False)
+
+            prep_run_btn.click(
+                fn=run_prepare_texture_lora_dataset_live,
+                inputs=[
+                    prep_input_dir,
+                    prep_output_dir,
+                    prep_crop_size,
+                    prep_num_crops_per_page,
+                    prep_min_edge_density,
+                    prep_seed,
+                    prep_canny_low,
+                    prep_canny_high,
+                ],
+                outputs=[prep_log, prep_preview, prep_preview_status, train_texture_dataset_dir],
+            )
+
+            train_texture_run_btn.click(
+                fn=run_train_texture_lora_live,
+                inputs=[
+                    train_texture_dataset_dir,
+                    train_texture_output_dir,
+                    train_texture_resolution,
+                    train_texture_batch_size,
+                    train_texture_lr,
+                    train_texture_steps,
+                    train_texture_rank,
+                    train_texture_alpha,
+                    train_texture_mixed_precision,
+                    train_texture_gc,
+                    train_texture_prompt,
+                    train_texture_seed,
+                    train_texture_base_model,
+                    train_texture_te,
+                    train_texture_workers,
+                    train_texture_lora_name,
+                ],
+                outputs=[train_texture_log, train_texture_lora_path, train_texture_cfg_path, diff_lora_path],
+            )
 
             diff_run_btn.click(
                 fn=run_texture_augment_live,
