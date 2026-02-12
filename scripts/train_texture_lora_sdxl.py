@@ -175,7 +175,14 @@ def _load_models(model_family: str, base_model_id: str) -> Dict[str, object]:
     }
 
 
-def _save_lora_weights(accelerator: Accelerator, args, unet, text_encoder_one=None, text_encoder_two=None) -> Path:
+def _save_lora_weights(
+    accelerator: Accelerator,
+    args,
+    unet,
+    text_encoder_one=None,
+    text_encoder_two=None,
+    weight_name: Optional[str] = None,
+) -> Path:
     unwrapped_unet = accelerator.unwrap_model(unet)
     unet_lora_state_dict = convert_state_dict_to_diffusers(get_peft_model_state_dict(unwrapped_unet))
 
@@ -192,13 +199,14 @@ def _save_lora_weights(accelerator: Accelerator, args, unet, text_encoder_one=No
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    target_name = (weight_name or args.lora_weights_name).strip()
 
     if args.model_family == "sd21":
         StableDiffusionPipeline.save_lora_weights(
             save_directory=str(output_dir),
             unet_lora_layers=unet_lora_state_dict,
             text_encoder_lora_layers=text_encoder_lora_state_dict,
-            weight_name=args.lora_weights_name,
+            weight_name=target_name,
             safe_serialization=True,
         )
     else:
@@ -207,10 +215,56 @@ def _save_lora_weights(accelerator: Accelerator, args, unet, text_encoder_one=No
             unet_lora_layers=unet_lora_state_dict,
             text_encoder_lora_layers=text_encoder_lora_state_dict,
             text_encoder_2_lora_layers=text_encoder_2_lora_state_dict,
-            weight_name=args.lora_weights_name,
+            weight_name=target_name,
             safe_serialization=True,
         )
-    return output_dir / args.lora_weights_name
+    return output_dir / target_name
+
+
+def _save_epoch_checkpoint(
+    accelerator: Accelerator,
+    args,
+    unet,
+    text_encoder_one,
+    text_encoder_two,
+    *,
+    epoch: int,
+    global_step: int,
+    base_model_id: str,
+    num_train_epochs: int,
+) -> tuple[Path, Path]:
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.checkpoint_overwrite:
+        ckpt_weight_name = (args.checkpoint_weights_name or "texture_lora_checkpoint.safetensors").strip()
+        ckpt_state_name = "checkpoint_state.json"
+    else:
+        ckpt_weight_name = f"texture_lora_checkpoint_epoch_{epoch:04d}.safetensors"
+        ckpt_state_name = f"checkpoint_state_epoch_{epoch:04d}.json"
+
+    ckpt_path = _save_lora_weights(
+        accelerator=accelerator,
+        args=args,
+        unet=unet,
+        text_encoder_one=text_encoder_one,
+        text_encoder_two=text_encoder_two,
+        weight_name=ckpt_weight_name,
+    )
+
+    ckpt_state = {
+        "epoch": int(epoch),
+        "global_step": int(global_step),
+        "num_train_epochs": int(num_train_epochs),
+        "model_family": args.model_family,
+        "base_model_id": base_model_id,
+        "checkpoint_weights": str(ckpt_path),
+        "dataset_dir": str(Path(args.dataset_dir).expanduser().resolve()),
+    }
+    ckpt_state_path = output_dir / ckpt_state_name
+    with ckpt_state_path.open("w", encoding="utf-8") as f:
+        json.dump(ckpt_state, f, indent=2, ensure_ascii=True)
+    return ckpt_path, ckpt_state_path
 
 
 def run(args) -> dict:
@@ -231,6 +285,8 @@ def run(args) -> dict:
         raise ValueError("batch_size must be > 0")
     if args.rank <= 0:
         raise ValueError("rank must be > 0")
+    if int(args.checkpoint_every_epochs) < 0:
+        raise ValueError("checkpoint_every_epochs must be >= 0")
 
     base_model_id = _resolve_base_model_id(args)
     LOGGER.info("Training family=%s base_model=%s", args.model_family, base_model_id)
@@ -497,6 +553,32 @@ def run(args) -> dict:
 
         if global_step >= args.max_train_steps:
             break
+
+        if (
+            int(args.checkpoint_every_epochs) > 0
+            and (epoch + 1) % int(args.checkpoint_every_epochs) == 0
+            and global_step > 0
+        ):
+            accelerator.wait_for_everyone()
+            if accelerator.is_main_process:
+                ckpt_path, ckpt_state_path = _save_epoch_checkpoint(
+                    accelerator=accelerator,
+                    args=args,
+                    unet=unet,
+                    text_encoder_one=text_encoder_one,
+                    text_encoder_two=text_encoder_two,
+                    epoch=epoch + 1,
+                    global_step=global_step,
+                    base_model_id=base_model_id,
+                    num_train_epochs=num_train_epochs,
+                )
+                LOGGER.info(
+                    "Saved epoch checkpoint at epoch=%d step=%d to %s (state: %s)",
+                    epoch + 1,
+                    global_step,
+                    ckpt_path,
+                    ckpt_state_path,
+                )
 
     accelerator.wait_for_everyone()
 
