@@ -1,20 +1,3 @@
-# PechaBridge: Diffusion + LoRA texture workflow dependencies
-# Covers scripts:
-# - scripts/prepare_texture_lora_dataset.py
-# - scripts/train_texture_lora_sdxl.py
-# - scripts/texture_augment.py
-
-torch>=2.3.0
-torchvision>=0.18.0
-numpy>=1.26.0
-Pillow>=10.4.0
-opencv-python>=4.10.0.84
-tqdm>=4.66.0
-
-# Hugging Face diffusion/training stack
-diffusers>=0.31.0
-accelerate>=0.34.0
-transformers>=4.44.0
-safetensors>=0.4.4
-peft>=0.13.0
-datasets>=2.21.0
+# Compatibility wrapper.
+# Use `requirements.txt` as the unified dependency file.
+-r requirements.txt

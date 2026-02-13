@@ -39,20 +39,17 @@ Dual-encoder alignment, ANN indexing, provenance-aware search results, and itera
 ## Install
 
 ```bash
-pip install -r requirements-ui.txt
+pip install -r requirements.txt
 ```
 
-If you want transformer/VLM features in the Workbench (`Batch VLM Layout (SBB)` and `VLM Layout` tabs), also install:
+`requirements.txt` is now the **unified** dependency file for:
 
-```bash
-pip install -r requirements-vlm.txt
-```
+- Workbench UI
+- VLM backends
+- Diffusion + LoRA workflows
+- Retrieval encoder training
 
-If you want diffusion + LoRA texture workflows and retrieval encoder training, also install:
-
-```bash
-pip install -r requirements-lora.txt
-```
+Legacy files `requirements-ui.txt`, `requirements-vlm.txt`, and `requirements-lora.txt` remain as compatibility wrappers.
 
 ## Start the Workbench
 

@@ -20,18 +20,8 @@ If you are a regular user, prefer the UI in `README.md`.
 pip install -r requirements.txt
 ```
 
-Optional UI/VLM extras:
-
-```bash
-pip install -r requirements-ui.txt
-pip install -r requirements-vlm.txt
-```
-
-Optional diffusion/LoRA + retrieval-encoder extras:
-
-```bash
-pip install -r requirements-lora.txt
-```
+`requirements.txt` is the unified dependency file for CLI, UI, VLM, diffusion/LoRA, and retrieval encoder training.
+Legacy files `requirements-ui.txt`, `requirements-vlm.txt`, and `requirements-lora.txt` remain as compatibility wrappers.
 
 ## Unified CLI (`cli.py`)
 

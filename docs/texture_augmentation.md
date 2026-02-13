@@ -10,6 +10,12 @@ Install core dependencies:
 pip install torch torchvision diffusers accelerate transformers opencv-python safetensors peft datasets tqdm
 ```
 
+Or install the project-wide unified dependency file:
+
+```bash
+pip install -r requirements.txt
+```
+
 Base models used by default:
 
 - `stabilityai/stable-diffusion-xl-base-1.0`
