@@ -83,6 +83,7 @@ py-cpuinfo==9.0.0
 pycparser==2.22
 Pygments==2.18.0
 pyparsing==3.2.1
+pydantic==2.10.6
 python-dateutil==2.9.0.post0
 python-json-logger==3.2.1
 pytz==2024.2

@@ -12,6 +12,7 @@ If you are a regular user, prefer the UI in `README.md`.
 - `pseudo_label_from_vlm.py`
 - `layout_rule_filter.py`
 - `run_pseudo_label_workflow.py`
+- `cli.py` (unified diffusion + retrieval-encoder commands)
 
 ## Install
 
@@ -25,6 +26,28 @@ Optional UI/VLM extras:
 pip install -r requirements-ui.txt
 pip install -r requirements-vlm.txt
 ```
+
+Optional diffusion/LoRA + retrieval-encoder extras:
+
+```bash
+pip install -r requirements-lora.txt
+```
+
+## Unified CLI (`cli.py`)
+
+Use:
+
+```bash
+python cli.py -h
+```
+
+Available subcommands:
+
+- `prepare-texture-lora-dataset`
+- `train-texture-lora`
+- `texture-augment`
+- `train-image-encoder`
+- `train-text-encoder`
 
 ## Example CLI Workflow
 
@@ -102,3 +125,5 @@ label-studio
 ## Additional Docs
 
 - Pseudo-labeling and Label Studio import details: [README_PSEUDO_LABELING_LABEL_STUDIO.md](README_PSEUDO_LABELING_LABEL_STUDIO.md)
+- Diffusion + LoRA details: [docs/texture_augmentation.md](docs/texture_augmentation.md)
+- Retrieval roadmap: [docs/tibetan_ngram_retrieval_plan.md](docs/tibetan_ngram_retrieval_plan.md)

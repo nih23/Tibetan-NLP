@@ -447,3 +447,122 @@ def create_texture_augment_parser(add_help: bool = True):
     )
     add_texture_augment_arguments(parser)
     return parser
+
+
+def add_train_image_encoder_arguments(parser):
+    """Arguments for self-supervised image encoder training."""
+    parser.add_argument('--input_dir', type=str, required=True,
+                       help='Folder with training images (recursive scan)')
+    parser.add_argument('--output_dir', type=str, required=True,
+                       help='Directory where trained image encoder artifacts are saved')
+    parser.add_argument('--model_name_or_path', type=str, default='facebook/dinov2-base',
+                       help='Backbone model ID or local path (transformers AutoModel)')
+    parser.add_argument('--resolution', type=int, default=448,
+                       help='Input image resolution for training')
+    parser.add_argument('--batch_size', type=int, default=8,
+                       help='Per-device batch size')
+    parser.add_argument('--lr', type=float, default=1e-4,
+                       help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.01,
+                       help='Weight decay')
+    parser.add_argument('--num_train_epochs', type=int, default=5,
+                       help='Number of training epochs (used when max_train_steps=0)')
+    parser.add_argument('--max_train_steps', type=int, default=0,
+                       help='Override total train steps (0 = derive from num_train_epochs)')
+    parser.add_argument('--warmup_steps', type=int, default=200,
+                       help='Warmup steps for lr scheduler')
+    parser.add_argument('--projection_dim', type=int, default=256,
+                       help='Output dimension of projection head')
+    parser.add_argument('--temperature', type=float, default=0.1,
+                       help='NT-Xent temperature')
+    parser.add_argument('--mixed_precision', type=str, default='fp16',
+                       choices=['no', 'fp16', 'bf16'],
+                       help='Accelerate mixed precision mode')
+    parser.add_argument('--gradient_checkpointing', action='store_true',
+                       help='Enable backbone gradient checkpointing when supported')
+    parser.add_argument('--freeze_backbone', action='store_true',
+                       help='Freeze backbone and train projection head only')
+    parser.add_argument('--num_workers', type=int, default=4,
+                       help='Dataloader workers')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed')
+    parser.add_argument('--checkpoint_every_steps', type=int, default=0,
+                       help='Save a checkpoint every N optimizer steps (0 disables)')
+    parser.add_argument('--checkpoint_name', type=str, default='checkpoint',
+                       help='Checkpoint prefix in output_dir')
+    parser.add_argument('--checkpoint_keep_all', dest='checkpoint_overwrite', action='store_false',
+                       help='Keep all checkpoints instead of overwriting')
+    parser.set_defaults(checkpoint_overwrite=True)
+
+
+def add_train_text_encoder_arguments(parser):
+    """Arguments for unsupervised Tibetan text encoder training."""
+    parser.add_argument('--input_dir', type=str, required=True,
+                       help='Folder with text files (.txt/.jsonl/.csv/.tsv)')
+    parser.add_argument('--output_dir', type=str, required=True,
+                       help='Directory where trained text encoder artifacts are saved')
+    parser.add_argument('--model_name_or_path', type=str, default='google/byt5-small',
+                       help='Backbone model ID or local path (transformers AutoModel)')
+    parser.add_argument('--normalization', type=str, default='NFC',
+                       choices=['NFC', 'NFKC', 'NFD', 'NFKD', 'none'],
+                       help='Unicode normalization strategy')
+    parser.add_argument('--min_chars', type=int, default=2,
+                       help='Minimum number of characters per sample')
+    parser.add_argument('--max_chars', type=int, default=512,
+                       help='Maximum number of characters per sample')
+    parser.add_argument('--max_length', type=int, default=256,
+                       help='Tokenizer max sequence length')
+    parser.add_argument('--batch_size', type=int, default=16,
+                       help='Per-device batch size')
+    parser.add_argument('--lr', type=float, default=5e-5,
+                       help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.01,
+                       help='Weight decay')
+    parser.add_argument('--num_train_epochs', type=int, default=5,
+                       help='Number of training epochs (used when max_train_steps=0)')
+    parser.add_argument('--max_train_steps', type=int, default=0,
+                       help='Override total train steps (0 = derive from num_train_epochs)')
+    parser.add_argument('--warmup_steps', type=int, default=200,
+                       help='Warmup steps for lr scheduler')
+    parser.add_argument('--projection_dim', type=int, default=256,
+                       help='Output dimension of projection head')
+    parser.add_argument('--temperature', type=float, default=0.05,
+                       help='NT-Xent temperature')
+    parser.add_argument('--mixed_precision', type=str, default='fp16',
+                       choices=['no', 'fp16', 'bf16'],
+                       help='Accelerate mixed precision mode')
+    parser.add_argument('--gradient_checkpointing', action='store_true',
+                       help='Enable backbone gradient checkpointing when supported')
+    parser.add_argument('--freeze_backbone', action='store_true',
+                       help='Freeze backbone and train projection head only')
+    parser.add_argument('--num_workers', type=int, default=4,
+                       help='Dataloader workers')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed')
+    parser.add_argument('--checkpoint_every_steps', type=int, default=0,
+                       help='Save a checkpoint every N optimizer steps (0 disables)')
+    parser.add_argument('--checkpoint_name', type=str, default='checkpoint',
+                       help='Checkpoint prefix in output_dir')
+    parser.add_argument('--checkpoint_keep_all', dest='checkpoint_overwrite', action='store_false',
+                       help='Keep all checkpoints instead of overwriting')
+    parser.set_defaults(checkpoint_overwrite=True)
+
+
+def create_train_image_encoder_parser(add_help: bool = True):
+    """Create parser for image encoder training."""
+    parser = argparse.ArgumentParser(
+        description="Train a self-supervised Tibetan page image encoder",
+        add_help=add_help,
+    )
+    add_train_image_encoder_arguments(parser)
+    return parser
+
+
+def create_train_text_encoder_parser(add_help: bool = True):
+    """Create parser for text encoder training."""
+    parser = argparse.ArgumentParser(
+        description="Train an unsupervised Tibetan text encoder",
+        add_help=add_help,
+    )
+    add_train_text_encoder_arguments(parser)
+    return parser

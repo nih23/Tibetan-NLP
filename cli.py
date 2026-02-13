@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unified PechaBridge CLI entrypoint for texture augmentation workflow."""
+"""Unified PechaBridge CLI entrypoint for diffusion and retrieval-encoder workflows."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import logging
 
 from tibetan_utils.arg_utils import (
     create_prepare_texture_lora_dataset_parser,
+    create_train_image_encoder_parser,
+    create_train_text_encoder_parser,
     create_texture_augment_parser,
     create_train_texture_lora_parser,
 )
@@ -46,6 +48,24 @@ def _build_root_parser() -> argparse.ArgumentParser:
     )
     augment_parser.set_defaults(handler=_run_texture_augment)
 
+    train_image_parent = create_train_image_encoder_parser(add_help=False)
+    train_image_parser = subparsers.add_parser(
+        "train-image-encoder",
+        parents=[train_image_parent],
+        help="Train self-supervised image encoder for Tibetan page retrieval",
+        description=train_image_parent.description,
+    )
+    train_image_parser.set_defaults(handler=_run_train_image_encoder)
+
+    train_text_parent = create_train_text_encoder_parser(add_help=False)
+    train_text_parser = subparsers.add_parser(
+        "train-text-encoder",
+        parents=[train_text_parent],
+        help="Train unsupervised Tibetan text encoder",
+        description=train_text_parent.description,
+    )
+    train_text_parser.set_defaults(handler=_run_train_text_encoder)
+
     return parser
 
 
@@ -65,6 +85,20 @@ def _run_train_texture_lora(args: argparse.Namespace) -> int:
 
 def _run_texture_augment(args: argparse.Namespace) -> int:
     from scripts.texture_augment import run
+
+    run(args)
+    return 0
+
+
+def _run_train_image_encoder(args: argparse.Namespace) -> int:
+    from scripts.train_image_encoder import run
+
+    run(args)
+    return 0
+
+
+def _run_train_text_encoder(args: argparse.Namespace) -> int:
+    from scripts.train_text_encoder import run
 
     run(args)
     return 0

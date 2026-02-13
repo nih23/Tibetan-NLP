@@ -37,6 +37,9 @@ CLI_SCRIPTS = [
     "pseudo_label_from_vlm.py",
     "layout_rule_filter.py",
     "run_pseudo_label_workflow.py",
+    "scripts/train_image_encoder.py",
+    "scripts/train_text_encoder.py",
+    "cli.py",
 ]
 
 TRANSFORMER_PARSERS = [
@@ -1100,6 +1103,403 @@ def run_train_texture_lora_live(
         + _tail_lines_newest_first(log_lines, 3000)
     )
     yield final_msg, str(expected_lora_path), str(expected_cfg_path), str(expected_lora_path)
+
+
+def run_train_image_encoder_live(
+    input_dir: str,
+    output_dir: str,
+    model_name_or_path: str,
+    resolution: int,
+    batch_size: int,
+    lr: float,
+    weight_decay: float,
+    num_train_epochs: int,
+    max_train_steps: int,
+    warmup_steps: int,
+    projection_dim: int,
+    temperature: float,
+    mixed_precision: str,
+    gradient_checkpointing: bool,
+    freeze_backbone: bool,
+    num_workers: int,
+    seed: Optional[int],
+    checkpoint_every_steps: int,
+):
+    input_path = Path(input_dir).expanduser().resolve()
+    output_path = Path(output_dir).expanduser().resolve()
+    script_path = ROOT / "scripts" / "train_image_encoder.py"
+
+    expected_backbone = output_path / "image_encoder_backbone"
+    expected_head = output_path / "image_projection_head.pt"
+    expected_cfg = output_path / "training_config.json"
+
+    if not script_path.exists():
+        msg = f"Failed: script not found: {script_path}"
+        yield msg, str(expected_backbone), str(expected_head), str(expected_cfg)
+        return
+    if not input_path.exists() or not input_path.is_dir():
+        msg = f"Failed: input_dir does not exist: {input_path}"
+        yield msg, str(expected_backbone), str(expected_head), str(expected_cfg)
+        return
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    seed_arg = 42
+    try:
+        if seed is not None:
+            seed_arg = int(float(seed))
+    except Exception:
+        seed_arg = 42
+
+    cmd = [
+        sys.executable,
+        "-u",
+        str(script_path),
+        "--input_dir",
+        str(input_path),
+        "--output_dir",
+        str(output_path),
+        "--model_name_or_path",
+        (model_name_or_path or "facebook/dinov2-base").strip(),
+        "--resolution",
+        str(int(resolution)),
+        "--batch_size",
+        str(int(batch_size)),
+        "--lr",
+        str(float(lr)),
+        "--weight_decay",
+        str(float(weight_decay)),
+        "--num_train_epochs",
+        str(int(num_train_epochs)),
+        "--max_train_steps",
+        str(int(max_train_steps)),
+        "--warmup_steps",
+        str(int(warmup_steps)),
+        "--projection_dim",
+        str(int(projection_dim)),
+        "--temperature",
+        str(float(temperature)),
+        "--mixed_precision",
+        (mixed_precision or "fp16").strip(),
+        "--num_workers",
+        str(int(num_workers)),
+        "--seed",
+        str(seed_arg),
+        "--checkpoint_every_steps",
+        str(int(checkpoint_every_steps)),
+    ]
+    if gradient_checkpointing:
+        cmd.append("--gradient_checkpointing")
+    if freeze_backbone:
+        cmd.append("--freeze_backbone")
+
+    try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0,
+        )
+    except Exception as exc:
+        msg = f"Failed\nOutput dir: {output_path}\n\n{type(exc).__name__}: {exc}"
+        yield msg, str(expected_backbone), str(expected_head), str(expected_cfg)
+        return
+
+    if proc.stdout is not None:
+        try:
+            os.set_blocking(proc.stdout.fileno(), False)
+        except Exception:
+            pass
+
+    log_lines: List[str] = []
+    partial = ""
+    last_emit_ts = 0.0
+    stream_failed = False
+    stream_fail_msg = ""
+
+    yield (
+        "Training image encoder ...\n"
+        f"Input dir: {input_path}\n"
+        f"Output dir: {output_path}\n"
+        f"Expected backbone: {expected_backbone}\n"
+        f"Command: {shlex.join(cmd)}\n",
+        str(expected_backbone),
+        str(expected_head),
+        str(expected_cfg),
+    )
+
+    while True:
+        got_output = False
+        if (not stream_failed) and proc.stdout is not None:
+            try:
+                chunk = proc.stdout.read()
+            except BlockingIOError:
+                chunk = b""
+            except Exception as exc:
+                stream_failed = True
+                stream_fail_msg = f"stdout stream disabled ({type(exc).__name__}: {exc})"
+                chunk = b""
+
+            if chunk:
+                got_output = True
+                chunk_text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else str(chunk)
+                partial += chunk_text.replace("\r", "\n")
+                parts = partial.splitlines(keepends=True)
+                keep = ""
+                for piece in parts:
+                    if piece.endswith("\n"):
+                        log_lines.append(piece.rstrip("\n"))
+                    else:
+                        keep = piece
+                partial = keep
+
+        now = time.time()
+        if now - last_emit_ts >= 1.0:
+            tail = _tail_lines_newest_first(log_lines, 800)
+            if stream_failed and stream_fail_msg:
+                tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
+            running_msg = (
+                "Training image encoder ...\n"
+                f"Input dir: {input_path}\n"
+                f"Output dir: {output_path}\n"
+                f"Expected backbone: {expected_backbone}\n\n{tail}"
+            )
+            yield running_msg, str(expected_backbone), str(expected_head), str(expected_cfg)
+            last_emit_ts = now
+
+        if proc.poll() is not None:
+            break
+
+        if not got_output:
+            time.sleep(0.15)
+
+    if proc.stdout is not None:
+        try:
+            rest = proc.stdout.read()
+        except Exception:
+            rest = b""
+        if rest:
+            partial += rest.decode("utf-8", errors="replace").replace("\r", "\n") if isinstance(rest, bytes) else str(rest).replace("\r", "\n")
+        if partial:
+            log_lines.extend(partial.splitlines())
+
+    ok = proc.returncode == 0
+    status = "Success" if ok else "Failed"
+    final_msg = (
+        f"{status}\nInput dir: {input_path}\nOutput dir: {output_path}\n"
+        f"Backbone path: {expected_backbone}\n\n"
+        + _tail_lines_newest_first(log_lines, 3000)
+    )
+    yield final_msg, str(expected_backbone), str(expected_head), str(expected_cfg)
+
+
+def run_train_text_encoder_live(
+    input_dir: str,
+    output_dir: str,
+    model_name_or_path: str,
+    normalization: str,
+    min_chars: int,
+    max_chars: int,
+    max_length: int,
+    batch_size: int,
+    lr: float,
+    weight_decay: float,
+    num_train_epochs: int,
+    max_train_steps: int,
+    warmup_steps: int,
+    projection_dim: int,
+    temperature: float,
+    mixed_precision: str,
+    gradient_checkpointing: bool,
+    freeze_backbone: bool,
+    num_workers: int,
+    seed: Optional[int],
+    checkpoint_every_steps: int,
+):
+    input_path = Path(input_dir).expanduser().resolve()
+    output_path = Path(output_dir).expanduser().resolve()
+    script_path = ROOT / "scripts" / "train_text_encoder.py"
+
+    expected_backbone = output_path / "text_encoder_backbone"
+    expected_tokenizer = output_path / "text_tokenizer"
+    expected_head = output_path / "text_projection_head.pt"
+    expected_cfg = output_path / "training_config.json"
+
+    if not script_path.exists():
+        msg = f"Failed: script not found: {script_path}"
+        yield msg, str(expected_backbone), str(expected_tokenizer), str(expected_head), str(expected_cfg)
+        return
+    if not input_path.exists() or not input_path.is_dir():
+        msg = f"Failed: input_dir does not exist: {input_path}"
+        yield msg, str(expected_backbone), str(expected_tokenizer), str(expected_head), str(expected_cfg)
+        return
+
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    seed_arg = 42
+    try:
+        if seed is not None:
+            seed_arg = int(float(seed))
+    except Exception:
+        seed_arg = 42
+
+    cmd = [
+        sys.executable,
+        "-u",
+        str(script_path),
+        "--input_dir",
+        str(input_path),
+        "--output_dir",
+        str(output_path),
+        "--model_name_or_path",
+        (model_name_or_path or "google/byt5-small").strip(),
+        "--normalization",
+        (normalization or "NFC").strip(),
+        "--min_chars",
+        str(int(min_chars)),
+        "--max_chars",
+        str(int(max_chars)),
+        "--max_length",
+        str(int(max_length)),
+        "--batch_size",
+        str(int(batch_size)),
+        "--lr",
+        str(float(lr)),
+        "--weight_decay",
+        str(float(weight_decay)),
+        "--num_train_epochs",
+        str(int(num_train_epochs)),
+        "--max_train_steps",
+        str(int(max_train_steps)),
+        "--warmup_steps",
+        str(int(warmup_steps)),
+        "--projection_dim",
+        str(int(projection_dim)),
+        "--temperature",
+        str(float(temperature)),
+        "--mixed_precision",
+        (mixed_precision or "fp16").strip(),
+        "--num_workers",
+        str(int(num_workers)),
+        "--seed",
+        str(seed_arg),
+        "--checkpoint_every_steps",
+        str(int(checkpoint_every_steps)),
+    ]
+    if gradient_checkpointing:
+        cmd.append("--gradient_checkpointing")
+    if freeze_backbone:
+        cmd.append("--freeze_backbone")
+
+    try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=False,
+            bufsize=0,
+        )
+    except Exception as exc:
+        msg = f"Failed\nOutput dir: {output_path}\n\n{type(exc).__name__}: {exc}"
+        yield msg, str(expected_backbone), str(expected_tokenizer), str(expected_head), str(expected_cfg)
+        return
+
+    if proc.stdout is not None:
+        try:
+            os.set_blocking(proc.stdout.fileno(), False)
+        except Exception:
+            pass
+
+    log_lines: List[str] = []
+    partial = ""
+    last_emit_ts = 0.0
+    stream_failed = False
+    stream_fail_msg = ""
+
+    yield (
+        "Training text encoder ...\n"
+        f"Input dir: {input_path}\n"
+        f"Output dir: {output_path}\n"
+        f"Expected backbone: {expected_backbone}\n"
+        f"Command: {shlex.join(cmd)}\n",
+        str(expected_backbone),
+        str(expected_tokenizer),
+        str(expected_head),
+        str(expected_cfg),
+    )
+
+    while True:
+        got_output = False
+        if (not stream_failed) and proc.stdout is not None:
+            try:
+                chunk = proc.stdout.read()
+            except BlockingIOError:
+                chunk = b""
+            except Exception as exc:
+                stream_failed = True
+                stream_fail_msg = f"stdout stream disabled ({type(exc).__name__}: {exc})"
+                chunk = b""
+
+            if chunk:
+                got_output = True
+                chunk_text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else str(chunk)
+                partial += chunk_text.replace("\r", "\n")
+                parts = partial.splitlines(keepends=True)
+                keep = ""
+                for piece in parts:
+                    if piece.endswith("\n"):
+                        log_lines.append(piece.rstrip("\n"))
+                    else:
+                        keep = piece
+                partial = keep
+
+        now = time.time()
+        if now - last_emit_ts >= 1.0:
+            tail = _tail_lines_newest_first(log_lines, 800)
+            if stream_failed and stream_fail_msg:
+                tail = f"{tail}\n[warning] {stream_fail_msg}" if tail else f"[warning] {stream_fail_msg}"
+            running_msg = (
+                "Training text encoder ...\n"
+                f"Input dir: {input_path}\n"
+                f"Output dir: {output_path}\n"
+                f"Expected backbone: {expected_backbone}\n\n{tail}"
+            )
+            yield running_msg, str(expected_backbone), str(expected_tokenizer), str(expected_head), str(expected_cfg)
+            last_emit_ts = now
+
+        if proc.poll() is not None:
+            break
+
+        if not got_output:
+            time.sleep(0.15)
+
+    if proc.stdout is not None:
+        try:
+            rest = proc.stdout.read()
+        except Exception:
+            rest = b""
+        if rest:
+            partial += rest.decode("utf-8", errors="replace").replace("\r", "\n") if isinstance(rest, bytes) else str(rest).replace("\r", "\n")
+        if partial:
+            log_lines.extend(partial.splitlines())
+
+    ok = proc.returncode == 0
+    status = "Success" if ok else "Failed"
+    final_msg = (
+        f"{status}\nInput dir: {input_path}\nOutput dir: {output_path}\n"
+        f"Backbone path: {expected_backbone}\n\n"
+        + _tail_lines_newest_first(log_lines, 3000)
+    )
+    yield final_msg, str(expected_backbone), str(expected_tokenizer), str(expected_head), str(expected_cfg)
 
 
 def refresh_image_list(dataset_dir: str, split: str):
@@ -2200,6 +2600,10 @@ def build_ui() -> gr.Blocks:
     default_texture_real_pages_dir = str((ROOT / "sbb_images").resolve())
     default_texture_lora_dataset_dir = str((ROOT / "datasets" / "texture-lora-dataset").resolve())
     default_texture_lora_output_dir = str((ROOT / "models" / "texture-lora-sdxl").resolve())
+    default_image_encoder_input_dir = str((ROOT / "sbb_images").resolve())
+    default_image_encoder_output_dir = str((ROOT / "models" / "image-encoder").resolve())
+    default_text_encoder_input_dir = str((ROOT / "data" / "corpora").resolve())
+    default_text_encoder_output_dir = str((ROOT / "models" / "text-encoder").resolve())
     default_prompt = (
         "Extract page layout blocks and OCR text. "
         "Return strict JSON with key 'detections' containing a list of objects with: "
@@ -2226,7 +2630,7 @@ def build_ui() -> gr.Blocks:
             gr.Markdown("## Workflow Overview")
             gr.Markdown(
                 "Use the tabs left-to-right. A practical flow is: Synthetic Data -> Diffusion + LoRA (texture) -> "
-                "Batch VLM Layout (SBB) -> Dataset Preview -> Ultralytics Training -> Model Inference -> "
+                "Retrieval Encoders -> Batch VLM Layout (SBB) -> Dataset Preview -> Ultralytics Training -> Model Inference -> "
                 "VLM Layout (single image) -> Label Studio Export."
             )
             gr.Markdown("### Tabs")
@@ -2241,7 +2645,8 @@ def build_ui() -> gr.Blocks:
                 "8. Label Studio Export: Convert YOLO split folders to Label Studio tasks and launch Label Studio.\n"
                 "9. PPN Downloader: Download and analyze SBB images.\n"
                 "10. Diffusion + LoRA: Prepare texture crops, train LoRA, and run SDXL/SD2.1 + ControlNet inference.\n"
-                "11. CLI Audit: Show all CLI options from project scripts."
+                "11. Retrieval Encoders: Train image and text encoders for future n-gram retrieval.\n"
+                "12. CLI Audit: Show all CLI options from project scripts."
             )
 
         # 2) Data generation
@@ -3006,8 +3411,168 @@ def build_ui() -> gr.Blocks:
                 outputs=[diff_preview, diff_preview_status],
             )
 
-        # 11) CLI reference
-        with gr.Tab("11. CLI Audit"):
+        # 11) Retrieval encoder training
+        with gr.Tab("11. Retrieval Encoders"):
+            gr.Markdown(
+                "Train unpaired encoders for future Tibetan n-gram retrieval: "
+                "A) self-supervised image encoder on page images, "
+                "B) unsupervised text encoder on Tibetan text files."
+            )
+
+            gr.Markdown("### A) Train Image Encoder (SimCLR-style)")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    image_enc_input_dir = gr.Textbox(label="input_dir (images)", value=default_image_encoder_input_dir)
+                    image_enc_output_dir = gr.Textbox(label="output_dir", value=default_image_encoder_output_dir)
+                    image_enc_model = gr.Textbox(label="model_name_or_path", value="facebook/dinov2-base")
+                    with gr.Row():
+                        image_enc_resolution = gr.Number(label="resolution", value=448, precision=0)
+                        image_enc_batch_size = gr.Number(label="batch_size", value=8, precision=0)
+                    with gr.Row():
+                        image_enc_lr = gr.Number(label="lr", value=1e-4, precision=6)
+                        image_enc_weight_decay = gr.Number(label="weight_decay", value=0.01, precision=4)
+                    with gr.Row():
+                        image_enc_epochs = gr.Number(label="num_train_epochs", value=5, precision=0)
+                        image_enc_max_steps = gr.Number(label="max_train_steps (0=use epochs)", value=0, precision=0)
+                    with gr.Row():
+                        image_enc_warmup = gr.Number(label="warmup_steps", value=200, precision=0)
+                        image_enc_proj_dim = gr.Number(label="projection_dim", value=256, precision=0)
+                    with gr.Row():
+                        image_enc_temperature = gr.Slider(0.01, 1.0, value=0.1, step=0.01, label="temperature")
+                        image_enc_mixed_precision = gr.Dropdown(
+                            choices=["no", "fp16", "bf16"],
+                            value="fp16",
+                            label="mixed_precision",
+                        )
+                    with gr.Row():
+                        image_enc_workers = gr.Number(label="num_workers", value=4, precision=0)
+                        image_enc_seed = gr.Number(label="seed", value=42, precision=0)
+                    with gr.Row():
+                        image_enc_checkpoint_every = gr.Number(label="checkpoint_every_steps (0=off)", value=0, precision=0)
+                        image_enc_gc = gr.Checkbox(label="gradient_checkpointing", value=False)
+                    image_enc_freeze = gr.Checkbox(label="freeze_backbone", value=False)
+                    image_enc_run_btn = gr.Button("Train Image Encoder", variant="primary")
+                with gr.Column(scale=1):
+                    image_enc_log = gr.Textbox(label="Image Encoder Log", lines=16, interactive=False)
+                    image_enc_backbone_path = gr.Textbox(label="Backbone Path", interactive=False)
+                    image_enc_head_path = gr.Textbox(label="Projection Head Path", interactive=False)
+                    image_enc_cfg_path = gr.Textbox(label="Training Config Path", interactive=False)
+
+            gr.Markdown("### B) Train Text Encoder (SimCSE-style)")
+            with gr.Row():
+                with gr.Column(scale=1):
+                    text_enc_input_dir = gr.Textbox(label="input_dir (text files)", value=default_text_encoder_input_dir)
+                    text_enc_output_dir = gr.Textbox(label="output_dir", value=default_text_encoder_output_dir)
+                    text_enc_model = gr.Textbox(label="model_name_or_path", value="google/byt5-small")
+                    with gr.Row():
+                        text_enc_normalization = gr.Dropdown(
+                            choices=["NFC", "NFKC", "NFD", "NFKD", "none"],
+                            value="NFC",
+                            label="normalization",
+                        )
+                        text_enc_max_length = gr.Number(label="max_length", value=256, precision=0)
+                    with gr.Row():
+                        text_enc_min_chars = gr.Number(label="min_chars", value=2, precision=0)
+                        text_enc_max_chars = gr.Number(label="max_chars", value=512, precision=0)
+                    with gr.Row():
+                        text_enc_batch_size = gr.Number(label="batch_size", value=16, precision=0)
+                        text_enc_lr = gr.Number(label="lr", value=5e-5, precision=6)
+                    with gr.Row():
+                        text_enc_weight_decay = gr.Number(label="weight_decay", value=0.01, precision=4)
+                        text_enc_epochs = gr.Number(label="num_train_epochs", value=5, precision=0)
+                    with gr.Row():
+                        text_enc_max_steps = gr.Number(label="max_train_steps (0=use epochs)", value=0, precision=0)
+                        text_enc_warmup = gr.Number(label="warmup_steps", value=200, precision=0)
+                    with gr.Row():
+                        text_enc_proj_dim = gr.Number(label="projection_dim", value=256, precision=0)
+                        text_enc_temperature = gr.Slider(0.01, 1.0, value=0.05, step=0.01, label="temperature")
+                    with gr.Row():
+                        text_enc_mixed_precision = gr.Dropdown(
+                            choices=["no", "fp16", "bf16"],
+                            value="fp16",
+                            label="mixed_precision",
+                        )
+                        text_enc_workers = gr.Number(label="num_workers", value=4, precision=0)
+                    with gr.Row():
+                        text_enc_seed = gr.Number(label="seed", value=42, precision=0)
+                        text_enc_checkpoint_every = gr.Number(label="checkpoint_every_steps (0=off)", value=0, precision=0)
+                    with gr.Row():
+                        text_enc_gc = gr.Checkbox(label="gradient_checkpointing", value=False)
+                        text_enc_freeze = gr.Checkbox(label="freeze_backbone", value=False)
+                    text_enc_run_btn = gr.Button("Train Text Encoder", variant="primary")
+                with gr.Column(scale=1):
+                    text_enc_log = gr.Textbox(label="Text Encoder Log", lines=16, interactive=False)
+                    text_enc_backbone_path = gr.Textbox(label="Backbone Path", interactive=False)
+                    text_enc_tokenizer_path = gr.Textbox(label="Tokenizer Path", interactive=False)
+                    text_enc_head_path = gr.Textbox(label="Projection Head Path", interactive=False)
+                    text_enc_cfg_path = gr.Textbox(label="Training Config Path", interactive=False)
+
+            image_enc_run_btn.click(
+                fn=run_train_image_encoder_live,
+                inputs=[
+                    image_enc_input_dir,
+                    image_enc_output_dir,
+                    image_enc_model,
+                    image_enc_resolution,
+                    image_enc_batch_size,
+                    image_enc_lr,
+                    image_enc_weight_decay,
+                    image_enc_epochs,
+                    image_enc_max_steps,
+                    image_enc_warmup,
+                    image_enc_proj_dim,
+                    image_enc_temperature,
+                    image_enc_mixed_precision,
+                    image_enc_gc,
+                    image_enc_freeze,
+                    image_enc_workers,
+                    image_enc_seed,
+                    image_enc_checkpoint_every,
+                ],
+                outputs=[
+                    image_enc_log,
+                    image_enc_backbone_path,
+                    image_enc_head_path,
+                    image_enc_cfg_path,
+                ],
+            )
+
+            text_enc_run_btn.click(
+                fn=run_train_text_encoder_live,
+                inputs=[
+                    text_enc_input_dir,
+                    text_enc_output_dir,
+                    text_enc_model,
+                    text_enc_normalization,
+                    text_enc_min_chars,
+                    text_enc_max_chars,
+                    text_enc_max_length,
+                    text_enc_batch_size,
+                    text_enc_lr,
+                    text_enc_weight_decay,
+                    text_enc_epochs,
+                    text_enc_max_steps,
+                    text_enc_warmup,
+                    text_enc_proj_dim,
+                    text_enc_temperature,
+                    text_enc_mixed_precision,
+                    text_enc_gc,
+                    text_enc_freeze,
+                    text_enc_workers,
+                    text_enc_seed,
+                    text_enc_checkpoint_every,
+                ],
+                outputs=[
+                    text_enc_log,
+                    text_enc_backbone_path,
+                    text_enc_tokenizer_path,
+                    text_enc_head_path,
+                    text_enc_cfg_path,
+                ],
+            )
+
+        # 12) CLI reference
+        with gr.Tab("12. CLI Audit"):
             audit_btn = gr.Button("Scan All CLI Options")
             audit_out = gr.Markdown()
             audit_btn.click(fn=collect_cli_help, inputs=[], outputs=[audit_out])
