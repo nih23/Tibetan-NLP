@@ -1,1 +1,1 @@
-"""Texture augmentation scripts package."""
+"""PechaBridge scripts package."""

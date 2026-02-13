@@ -15,6 +15,16 @@ The project combines:
 
 The primary entrypoint for end-to-end usage is the **Workbench UI** (`ui_workbench.py`).
 
+## Core Features
+
+- **Synthetic multi-class dataset generation**: Creates YOLO-ready pages for Tibetan number words, Tibetan text blocks, and Chinese number words.
+- **OCR-ready target export**: Optionally saves rendered OCR targets with deterministic line linearization and optional OCR crop export by label.
+- **Detection training and inference**: Provides Ultralytics YOLO training, validation, and inference workflows for local data and SBB pages.
+- **Pseudo-labeling and rule-based filtering**: Supports VLM-assisted layout extraction plus post-filtering before annotation review.
+- **Donut-style OCR workflow (Label 1)**: Runs generation, manifest preparation, tokenizer handling, and Vision Transformer encoder + autoregressive decoder training.
+- **Diffusion texture adaptation**: Includes SDXL/SD2.1 + ControlNet augmentation and optional LoRA integration for more realistic page textures.
+- **Retrieval encoder preparation**: Adds unpaired image/text encoder training as a base for future Tibetan n-gram retrieval.
+
 ## Project Goals
 
 1. Build a robust pipeline for Tibetan page layout analysis that works with limited labeled data.
@@ -50,6 +60,14 @@ pip install -r requirements.txt
 - Retrieval encoder training
 
 Legacy files `requirements-ui.txt`, `requirements-vlm.txt`, and `requirements-lora.txt` remain as compatibility wrappers.
+
+## Documentation Guide
+
+- CLI command reference and end-to-end examples: [README_CLI.md](README_CLI.md)
+- Pseudo-labeling and Label Studio workflow: [README_PSEUDO_LABELING_LABEL_STUDIO.md](README_PSEUDO_LABELING_LABEL_STUDIO.md)
+- Diffusion + LoRA details: [docs/texture_augmentation.md](docs/texture_augmentation.md)
+- Retrieval roadmap: [docs/tibetan_ngram_retrieval_plan.md](docs/tibetan_ngram_retrieval_plan.md)
+- Chinese number corpus note: [data/corpora/Chinese Number Words/README.md](data/corpora/Chinese%20Number%20Words/README.md)
 
 ## Start the Workbench
 
@@ -115,6 +133,14 @@ python cli.py train-image-encoder --input_dir ./sbb_images --output_dir ./models
 
 # Train text encoder (unsupervised, Unicode-normalized)
 python cli.py train-text-encoder --input_dir ./data/corpora --output_dir ./models/text-encoder
+
+# Full label-1 OCR workflow (generate -> prepare -> train)
+python cli.py run-donut-ocr-workflow \
+  --dataset_name tibetan-donut-ocr-label1 \
+  --dataset_output_dir ./datasets \
+  --font_path_tibetan "ext/Microsoft Himalaya.ttf" \
+  --font_path_chinese ext/simkai.ttf \
+  --model_output_dir ./models/donut-ocr-label1
 ```
 
 ## Label Studio Notes

@@ -38,6 +38,9 @@ Available subcommands:
 - `texture-augment`
 - `train-image-encoder`
 - `train-text-encoder`
+- `prepare-donut-ocr-dataset`
+- `train-donut-ocr`
+- `run-donut-ocr-workflow`
 
 ## Example CLI Workflow
 
@@ -50,6 +53,20 @@ python generate_training_data.py \
   --font_path_tibetan ext/Microsoft\ Himalaya.ttf \
   --font_path_chinese ext/simkai.ttf \
   --dataset_name tibetan-yolo
+```
+
+Optional: apply LoRA-based texture augmentation directly during data generation:
+
+```bash
+python generate_training_data.py \
+  --train_samples 100 \
+  --val_samples 20 \
+  --font_path_tibetan ext/Microsoft\ Himalaya.ttf \
+  --font_path_chinese ext/simkai.ttf \
+  --dataset_name tibetan-yolo \
+  --lora_augment_path ./models/texture-lora-sdxl/texture_lora.safetensors \
+  --lora_augment_splits train \
+  --lora_augment_targets images
 ```
 
 ### 2) Train model
@@ -91,6 +108,67 @@ python ocr_on_detections.py --source image.jpg --parser paddleocr_vl
 python ocr_on_detections.py --source image.jpg --parser qwen25vl
 python ocr_on_detections.py --source image.jpg --parser granite_docling
 python ocr_on_detections.py --source image.jpg --parser deepseek_ocr
+```
+
+### 5) Donut-style OCR workflow (Label 1 only)
+
+End-to-end (generate synthetic data + prepare manifests + train OCR model):
+
+```bash
+python cli.py run-donut-ocr-workflow \
+  --dataset_name tibetan-donut-ocr-label1 \
+  --dataset_output_dir ./datasets \
+  --font_path_tibetan "ext/Microsoft Himalaya.ttf" \
+  --font_path_chinese ext/simkai.ttf \
+  --train_samples 2000 \
+  --val_samples 200 \
+  --target_newline_token "<NL>" \
+  --model_output_dir ./models/donut-ocr-label1
+```
+
+Optional with LoRA augmentation during the generation step:
+
+```bash
+python cli.py run-donut-ocr-workflow \
+  --dataset_name tibetan-donut-ocr-label1 \
+  --dataset_output_dir ./datasets \
+  --font_path_tibetan "ext/Microsoft Himalaya.ttf" \
+  --font_path_chinese ext/simkai.ttf \
+  --lora_augment_path ./models/texture-lora-sdxl/texture_lora.safetensors \
+  --lora_augment_splits train \
+  --lora_augment_targets images_and_ocr_crops \
+  --model_output_dir ./models/donut-ocr-label1
+```
+
+Manual step-by-step:
+
+```bash
+# A) Synthetic data + OCR crops/targets (label 1 only for crops)
+python generate_training_data.py \
+  --dataset_name tibetan-donut-ocr-label1 \
+  --output_dir ./datasets \
+  --font_path_tibetan "ext/Microsoft Himalaya.ttf" \
+  --font_path_chinese ext/simkai.ttf \
+  --train_samples 2000 \
+  --val_samples 200 \
+  --save_rendered_text_targets \
+  --save_ocr_crops \
+  --ocr_crop_labels 1 \
+  --target_newline_token "<NL>"
+
+# B) Prepare JSONL manifests from ocr_targets/ocr_crops (label_id=1)
+python cli.py prepare-donut-ocr-dataset \
+  --dataset_dir ./datasets/tibetan-donut-ocr-label1 \
+  --output_dir ./datasets/tibetan-donut-ocr-label1/donut_ocr_label1 \
+  --label_id 1
+
+# C) Train VisionEncoderDecoder OCR model
+python cli.py train-donut-ocr \
+  --train_manifest ./datasets/tibetan-donut-ocr-label1/donut_ocr_label1/train_manifest.jsonl \
+  --val_manifest ./datasets/tibetan-donut-ocr-label1/donut_ocr_label1/val_manifest.jsonl \
+  --output_dir ./models/donut-ocr-label1 \
+  --model_name_or_path microsoft/trocr-base-stage1 \
+  --train_tokenizer
 ```
 
 ## Label Studio (CLI)

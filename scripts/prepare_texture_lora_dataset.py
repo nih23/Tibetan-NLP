@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import logging
 import random
@@ -222,12 +223,36 @@ def run(args) -> dict:
 
     LOGGER.info("Saved %d crops from %d pages to %s", total_crops, page_count, output_dir)
     LOGGER.info("Metadata written to %s", metadata_path)
-    return {
+    result = {
         "pages_processed": page_count,
         "crops_written": total_crops,
         "output_dir": str(output_dir),
         "metadata_path": str(metadata_path),
     }
+    if str(getattr(args, "lora_augment_path", "")).strip():
+        from scripts.texture_augment import run as run_texture_augment
+
+        LOGGER.info("Applying optional LoRA augmentation on prepared crops: %s", images_dir)
+        aug_args = argparse.Namespace(
+            model_family=args.lora_augment_model_family,
+            input_dir=str(images_dir),
+            output_dir=str(images_dir),  # in-place augmentation keeps metadata stable
+            strength=float(args.lora_augment_strength),
+            steps=int(args.lora_augment_steps),
+            guidance_scale=float(args.lora_augment_guidance_scale),
+            seed=args.lora_augment_seed,
+            controlnet_scale=float(args.lora_augment_controlnet_scale),
+            lora_path=str(args.lora_augment_path),
+            lora_scale=float(args.lora_augment_scale),
+            prompt=str(args.lora_augment_prompt),
+            base_model_id=str(args.lora_augment_base_model_id),
+            controlnet_model_id=str(args.lora_augment_controlnet_model_id),
+            canny_low=int(args.lora_augment_canny_low),
+            canny_high=int(args.lora_augment_canny_high),
+        )
+        aug_report = run_texture_augment(aug_args)
+        result["lora_augmentation"] = aug_report
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:

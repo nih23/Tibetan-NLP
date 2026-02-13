@@ -98,6 +98,46 @@ def add_dataset_generation_arguments(parser):
     parser.add_argument('--annotations_file_path', type=str,
                        default=DEFAULT_ANNOTATION_FILE_PATH,
                        help='Path to a YOLO annotation file to load and draw bounding boxes from.')
+    parser.add_argument('--save_rendered_text_targets', action='store_true',
+                       help='Save per-sample OCR targets with deterministic line linearization.')
+    parser.add_argument('--save_ocr_crops', action='store_true',
+                       help='Save per-region OCR crop images under <split>/ocr_crops.')
+    parser.add_argument('--ocr_crop_labels', type=str, default='2',
+                       help='Comma-separated class IDs for OCR crop export (e.g. "2" or "0,2"). Default: 2.')
+    parser.add_argument('--target_newline_token', type=str, choices=['\\n', '<NL>'], default='\\n',
+                       help="Line-break token used in OCR target_text: real newline ('\\n') or '<NL>'.")
+    parser.add_argument('--lora_augment_path', type=str, default='',
+                       help='Optional LoRA path to texture-augment generated data in-place.')
+    parser.add_argument('--lora_augment_model_family', type=str, choices=['sdxl', 'sd21'], default='sdxl',
+                       help='Diffusion model family used for LoRA texture augmentation.')
+    parser.add_argument('--lora_augment_base_model_id', type=str,
+                       default='stabilityai/stable-diffusion-xl-base-1.0',
+                       help='Base diffusion model ID for LoRA augmentation.')
+    parser.add_argument('--lora_augment_controlnet_model_id', type=str,
+                       default='diffusers/controlnet-canny-sdxl-1.0',
+                       help='ControlNet model ID for LoRA augmentation.')
+    parser.add_argument('--lora_augment_prompt', type=str, default='scanned printed page',
+                       help='Prompt used for LoRA augmentation.')
+    parser.add_argument('--lora_augment_scale', type=float, default=0.8,
+                       help='LoRA cross-attention scale for augmentation.')
+    parser.add_argument('--lora_augment_strength', type=float, default=0.2,
+                       help='Img2img strength for LoRA augmentation (clamped to <=0.25 by backend).')
+    parser.add_argument('--lora_augment_steps', type=int, default=28,
+                       help='Diffusion inference steps for LoRA augmentation.')
+    parser.add_argument('--lora_augment_guidance_scale', type=float, default=1.0,
+                       help='Classifier-free guidance scale for LoRA augmentation.')
+    parser.add_argument('--lora_augment_controlnet_scale', type=float, default=2.0,
+                       help='ControlNet conditioning scale for LoRA augmentation.')
+    parser.add_argument('--lora_augment_seed', type=int, default=None,
+                       help='Optional random seed for deterministic LoRA augmentation.')
+    parser.add_argument('--lora_augment_splits', type=str, default='train',
+                       help='Comma-separated splits for augmentation (e.g. "train" or "train,val").')
+    parser.add_argument('--lora_augment_targets', type=str, choices=['images', 'images_and_ocr_crops'],
+                       default='images', help='Which generated assets to augment with LoRA.')
+    parser.add_argument('--lora_augment_canny_low', type=int, default=100,
+                       help='Canny low threshold used for LoRA augmentation conditioning.')
+    parser.add_argument('--lora_augment_canny_high', type=int, default=200,
+                       help='Canny high threshold used for LoRA augmentation conditioning.')
 
 
 def add_training_arguments(parser):
@@ -332,6 +372,34 @@ def add_prepare_texture_lora_dataset_arguments(parser):
                        help='Lower threshold for Canny edges')
     parser.add_argument('--canny_high', type=int, default=200,
                        help='Upper threshold for Canny edges')
+    parser.add_argument('--lora_augment_path', type=str, default='',
+                       help='Optional LoRA path to augment generated crops in-place.')
+    parser.add_argument('--lora_augment_model_family', type=str, choices=['sdxl', 'sd21'], default='sdxl',
+                       help='Diffusion model family used for optional crop augmentation.')
+    parser.add_argument('--lora_augment_base_model_id', type=str,
+                       default='stabilityai/stable-diffusion-xl-base-1.0',
+                       help='Base diffusion model ID for optional crop augmentation.')
+    parser.add_argument('--lora_augment_controlnet_model_id', type=str,
+                       default='diffusers/controlnet-canny-sdxl-1.0',
+                       help='ControlNet model ID for optional crop augmentation.')
+    parser.add_argument('--lora_augment_prompt', type=str, default='scanned printed page',
+                       help='Prompt used for optional crop augmentation.')
+    parser.add_argument('--lora_augment_scale', type=float, default=0.8,
+                       help='LoRA scale used for optional crop augmentation.')
+    parser.add_argument('--lora_augment_strength', type=float, default=0.2,
+                       help='Img2img strength for optional crop augmentation.')
+    parser.add_argument('--lora_augment_steps', type=int, default=28,
+                       help='Diffusion steps for optional crop augmentation.')
+    parser.add_argument('--lora_augment_guidance_scale', type=float, default=1.0,
+                       help='Guidance scale for optional crop augmentation.')
+    parser.add_argument('--lora_augment_controlnet_scale', type=float, default=2.0,
+                       help='ControlNet scale for optional crop augmentation.')
+    parser.add_argument('--lora_augment_seed', type=int, default=None,
+                       help='Optional random seed for deterministic crop augmentation.')
+    parser.add_argument('--lora_augment_canny_low', type=int, default=100,
+                       help='Canny low threshold for optional crop augmentation.')
+    parser.add_argument('--lora_augment_canny_high', type=int, default=200,
+                       help='Canny high threshold for optional crop augmentation.')
 
 
 def add_train_texture_lora_arguments(parser):
@@ -565,4 +633,232 @@ def create_train_text_encoder_parser(add_help: bool = True):
         add_help=add_help,
     )
     add_train_text_encoder_arguments(parser)
+    return parser
+
+
+def add_prepare_donut_ocr_dataset_arguments(parser):
+    """Arguments for preparing label-filtered OCR manifests for Donut-style training."""
+    parser.add_argument('--dataset_dir', type=str, required=True,
+                       help='Dataset root containing train/val with ocr_targets and ocr_crops')
+    parser.add_argument('--output_dir', type=str, required=True,
+                       help='Output directory for train/val manifests')
+    parser.add_argument('--label_id', type=int, default=1,
+                       help='Class label ID to keep for OCR training (default: 1)')
+    parser.add_argument('--splits', type=str, default='train,val',
+                       help='Comma-separated splits to process (default: train,val)')
+    parser.add_argument('--text_field', type=str, choices=['target_text', 'rendered_text'], default='target_text',
+                       help='Which text field from ocr_targets records to use')
+    parser.add_argument('--normalization', type=str, default='NFC',
+                       choices=['NFC', 'NFKC', 'NFD', 'NFKD', 'none'],
+                       help='Unicode normalization strategy for output text')
+    parser.add_argument('--output_newline_token', type=str, choices=['keep', '<NL>', '\\n'], default='keep',
+                       help="How to represent newlines in output text.")
+    parser.add_argument('--min_chars', type=int, default=1,
+                       help='Drop samples with fewer characters after normalization')
+    parser.add_argument('--max_chars', type=int, default=0,
+                       help='Truncate samples to max chars (0 = no truncation)')
+    parser.add_argument('--max_samples_per_split', type=int, default=0,
+                       help='Optional cap per split after filtering (0 = no cap)')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed used when max_samples_per_split > 0')
+
+    parser.add_argument('--wrap_task_tokens', dest='wrap_task_tokens', action='store_true',
+                       help='Wrap targets with task start/end tokens (enabled by default)')
+    parser.add_argument('--no_wrap_task_tokens', dest='wrap_task_tokens', action='store_false',
+                       help='Disable task start/end wrapping')
+    parser.set_defaults(wrap_task_tokens=True)
+    parser.add_argument('--task_start_token', type=str, default='<s_ocr>',
+                       help='Task start token for decoder targets')
+    parser.add_argument('--task_end_token', type=str, default='</s_ocr>',
+                       help='Task end token for decoder targets')
+
+    parser.add_argument('--include_class_token', dest='include_class_token', action='store_true',
+                       help='Prefix targets with class token (enabled by default)')
+    parser.add_argument('--no_include_class_token', dest='include_class_token', action='store_false',
+                       help='Disable class token prefix')
+    parser.set_defaults(include_class_token=True)
+    parser.add_argument('--class_token', type=str, default='<s_cls1>',
+                       help='Class token to prepend when include_class_token is enabled')
+
+    parser.add_argument('--dedupe', dest='dedupe', action='store_true',
+                       help='Remove duplicate (image,text) pairs (enabled by default)')
+    parser.add_argument('--no_dedupe', dest='dedupe', action='store_false',
+                       help='Keep duplicates')
+    parser.set_defaults(dedupe=True)
+
+
+def add_train_donut_ocr_arguments(parser):
+    """Arguments for Donut-style OCR model training."""
+    parser.add_argument('--train_manifest', type=str, required=True,
+                       help='Path to training JSONL manifest')
+    parser.add_argument('--val_manifest', type=str, default='',
+                       help='Optional validation JSONL manifest')
+    parser.add_argument('--output_dir', type=str, required=True,
+                       help='Output directory for checkpoints and final model')
+    parser.add_argument('--model_name_or_path', type=str, default='microsoft/trocr-base-stage1',
+                       help='VisionEncoderDecoder checkpoint to fine-tune')
+    parser.add_argument('--image_processor_path', type=str, default='',
+                       help='Optional image processor checkpoint/path override')
+    parser.add_argument('--tokenizer_path', type=str, default='',
+                       help='Optional tokenizer checkpoint/path override')
+    parser.add_argument('--train_tokenizer', action='store_true',
+                       help='Train a new tokenizer from training targets')
+    parser.add_argument('--tokenizer_vocab_size', type=int, default=16000,
+                       help='Vocabulary size when train_tokenizer is enabled')
+    parser.add_argument('--tokenizer_output_dir', type=str, default='',
+                       help='Optional explicit path where tokenizer is saved')
+    parser.add_argument('--extra_special_tokens', type=str,
+                       default='<NL>,<s_ocr>,</s_ocr>,<s_cls1>',
+                       help='Comma-separated special tokens to ensure in tokenizer vocab')
+    parser.add_argument('--decoder_start_token', type=str, default='<s_ocr>',
+                       help='Token used as decoder start token')
+    parser.add_argument('--image_size', type=int, default=384,
+                       help='Square resize used by image processor')
+    parser.add_argument('--max_target_length', type=int, default=512,
+                       help='Maximum target token length for training labels')
+    parser.add_argument('--generation_max_length', type=int, default=512,
+                       help='Maximum generated token length during eval')
+    parser.add_argument('--per_device_train_batch_size', type=int, default=4,
+                       help='Train batch size per device')
+    parser.add_argument('--per_device_eval_batch_size', type=int, default=4,
+                       help='Eval batch size per device')
+    parser.add_argument('--gradient_accumulation_steps', type=int, default=1,
+                       help='Number of grad accumulation steps')
+    parser.add_argument('--learning_rate', type=float, default=5e-5,
+                       help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.01,
+                       help='Weight decay')
+    parser.add_argument('--num_train_epochs', type=float, default=8.0,
+                       help='Number of training epochs')
+    parser.add_argument('--warmup_steps', type=int, default=200,
+                       help='Warmup steps')
+    parser.add_argument('--logging_steps', type=int, default=20,
+                       help='Logging interval (steps)')
+    parser.add_argument('--eval_steps', type=int, default=200,
+                       help='Evaluation interval (steps)')
+    parser.add_argument('--save_steps', type=int, default=200,
+                       help='Checkpoint interval (steps)')
+    parser.add_argument('--save_total_limit', type=int, default=3,
+                       help='Maximum number of checkpoints to keep')
+    parser.add_argument('--num_workers', type=int, default=4,
+                       help='DataLoader workers')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed')
+    parser.add_argument('--fp16', action='store_true',
+                       help='Enable fp16 training')
+    parser.add_argument('--bf16', action='store_true',
+                       help='Enable bf16 training')
+    parser.add_argument('--metric_newline_token', type=str, choices=['<NL>', '\\n'], default='<NL>',
+                       help='Newline token normalization used for CER computation')
+    parser.add_argument('--resume_from_checkpoint', type=str, default='',
+                       help='Optional checkpoint path to resume training from')
+
+
+def add_run_donut_ocr_workflow_arguments(parser):
+    """Arguments for end-to-end synthetic generation + OCR prep + Donut training."""
+    parser.add_argument('--dataset_name', type=str, default='tibetan-donut-ocr-label1',
+                       help='Dataset name used in generate_training_data.py')
+    parser.add_argument('--dataset_output_dir', type=str, default='./datasets',
+                       help='Base output directory for generated dataset')
+    parser.add_argument('--train_samples', type=int, default=2000,
+                       help='Number of synthetic train samples')
+    parser.add_argument('--val_samples', type=int, default=200,
+                       help='Number of synthetic val samples')
+    parser.add_argument('--font_path_tibetan', type=str, required=True,
+                       help='Path to Tibetan font file')
+    parser.add_argument('--font_path_chinese', type=str, required=True,
+                       help='Path to Chinese font file')
+    parser.add_argument('--augmentation', type=str, choices=['rotate', 'noise', 'none'], default='noise',
+                       help='Synthetic augmentation mode')
+    parser.add_argument('--target_newline_token', type=str, choices=['\\n', '<NL>'], default='<NL>',
+                       help='Target newline token for generated OCR texts')
+    parser.add_argument('--prepared_output_dir', type=str, default='',
+                       help='Optional explicit output directory for prepared manifests')
+    parser.add_argument('--model_output_dir', type=str, default='./models/donut-ocr-label1',
+                       help='Output directory for trained OCR model')
+    parser.add_argument('--model_name_or_path', type=str, default='microsoft/trocr-base-stage1',
+                       help='VisionEncoderDecoder checkpoint to fine-tune')
+    parser.add_argument('--train_tokenizer', action='store_true',
+                       help='Train a tokenizer from label-1 OCR targets')
+    parser.add_argument('--tokenizer_vocab_size', type=int, default=16000,
+                       help='Tokenizer vocab size when train_tokenizer is enabled')
+    parser.add_argument('--per_device_train_batch_size', type=int, default=4,
+                       help='Train batch size per device')
+    parser.add_argument('--per_device_eval_batch_size', type=int, default=4,
+                       help='Eval batch size per device')
+    parser.add_argument('--num_train_epochs', type=float, default=8.0,
+                       help='Training epochs')
+    parser.add_argument('--learning_rate', type=float, default=5e-5,
+                       help='Learning rate')
+    parser.add_argument('--max_target_length', type=int, default=512,
+                       help='Maximum target length')
+    parser.add_argument('--image_size', type=int, default=384,
+                       help='Image size for OCR model input')
+    parser.add_argument('--seed', type=int, default=42,
+                       help='Random seed')
+    parser.add_argument('--skip_generation', action='store_true',
+                       help='Skip synthetic generation and use existing dataset dir')
+    parser.add_argument('--skip_prepare', action='store_true',
+                       help='Skip OCR manifest preparation')
+    parser.add_argument('--skip_train', action='store_true',
+                       help='Skip OCR training step')
+    parser.add_argument('--lora_augment_path', type=str, default='',
+                       help='Optional LoRA path for augmentation during synthetic generation.')
+    parser.add_argument('--lora_augment_model_family', type=str, choices=['sdxl', 'sd21'], default='sdxl',
+                       help='Diffusion model family for optional LoRA augmentation.')
+    parser.add_argument('--lora_augment_base_model_id', type=str,
+                       default='stabilityai/stable-diffusion-xl-base-1.0',
+                       help='Base model ID for optional LoRA augmentation.')
+    parser.add_argument('--lora_augment_controlnet_model_id', type=str,
+                       default='diffusers/controlnet-canny-sdxl-1.0',
+                       help='ControlNet model ID for optional LoRA augmentation.')
+    parser.add_argument('--lora_augment_prompt', type=str, default='scanned printed page',
+                       help='Prompt for optional LoRA augmentation.')
+    parser.add_argument('--lora_augment_scale', type=float, default=0.8,
+                       help='LoRA scale for optional augmentation.')
+    parser.add_argument('--lora_augment_strength', type=float, default=0.2,
+                       help='Img2img strength for optional augmentation.')
+    parser.add_argument('--lora_augment_steps', type=int, default=28,
+                       help='Diffusion steps for optional augmentation.')
+    parser.add_argument('--lora_augment_guidance_scale', type=float, default=1.0,
+                       help='Guidance scale for optional augmentation.')
+    parser.add_argument('--lora_augment_controlnet_scale', type=float, default=2.0,
+                       help='ControlNet scale for optional augmentation.')
+    parser.add_argument('--lora_augment_seed', type=int, default=None,
+                       help='Seed for optional LoRA augmentation.')
+    parser.add_argument('--lora_augment_splits', type=str, default='train',
+                       help='Comma-separated splits for optional LoRA augmentation.')
+    parser.add_argument('--lora_augment_targets', type=str, choices=['images', 'images_and_ocr_crops'],
+                       default='images_and_ocr_crops',
+                       help='Assets to augment during synthetic generation in workflow mode.')
+    parser.add_argument('--lora_augment_canny_low', type=int, default=100,
+                       help='Canny low threshold for optional LoRA augmentation.')
+    parser.add_argument('--lora_augment_canny_high', type=int, default=200,
+                       help='Canny high threshold for optional LoRA augmentation.')
+
+
+def create_prepare_donut_ocr_dataset_parser(add_help: bool = True):
+    parser = argparse.ArgumentParser(
+        description="Prepare label-filtered OCR manifests for Donut-style OCR training",
+        add_help=add_help,
+    )
+    add_prepare_donut_ocr_dataset_arguments(parser)
+    return parser
+
+
+def create_train_donut_ocr_parser(add_help: bool = True):
+    parser = argparse.ArgumentParser(
+        description="Train a Donut-style OCR model (VisionEncoderDecoder) on OCR crops",
+        add_help=add_help,
+    )
+    add_train_donut_ocr_arguments(parser)
+    return parser
+
+
+def create_run_donut_ocr_workflow_parser(add_help: bool = True):
+    parser = argparse.ArgumentParser(
+        description="Run full label-1 OCR workflow: synthetic data -> manifests -> Donut-style training",
+        add_help=add_help,
+    )
+    add_run_donut_ocr_workflow_arguments(parser)
     return parser

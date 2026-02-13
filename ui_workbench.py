@@ -16,6 +16,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
@@ -547,6 +548,87 @@ def _latest_image_from_folder(folder: str) -> Tuple[Optional[np.ndarray], str]:
 
 def preview_latest_texture_output(output_dir: str):
     return _latest_image_from_folder(output_dir)
+
+
+def _save_debug_upload_image(upload_image: Optional[np.ndarray]) -> Tuple[Optional[Path], Optional[str]]:
+    if upload_image is None:
+        return None, "Please upload or paste an image for debug inference."
+
+    try:
+        arr = np.asarray(upload_image)
+        if arr.size == 0:
+            return None, "Uploaded debug image is empty."
+
+        if arr.dtype.kind == "f":
+            arr = np.nan_to_num(arr, nan=0.0, posinf=255.0, neginf=0.0)
+            if float(np.max(arr)) <= 1.0:
+                arr = arr * 255.0
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+
+        if arr.ndim == 3 and arr.shape[2] == 1:
+            arr = arr[:, :, 0]
+        if arr.ndim == 3 and arr.shape[2] > 4:
+            arr = arr[:, :, :3]
+        if arr.ndim not in {2, 3}:
+            return None, f"Unsupported upload shape: {arr.shape}"
+
+        tmp_root = Path(tempfile.gettempdir()) / "pechabridge_texture_debug_uploads"
+        run_dir = tmp_root / f"run_{int(time.time() * 1000)}"
+        run_dir.mkdir(parents=True, exist_ok=True)
+        image_path = run_dir / "debug_input.png"
+        Image.fromarray(arr).convert("RGB").save(image_path)
+        return run_dir, None
+    except Exception as exc:
+        return None, f"Failed to serialize uploaded image ({type(exc).__name__}: {exc})"
+
+
+def run_texture_augment_upload_live(
+    upload_image: Optional[np.ndarray],
+    output_dir: str,
+    model_family: str,
+    strength: float,
+    steps: int,
+    guidance_scale: float,
+    seed: Optional[int],
+    controlnet_scale: float,
+    lora_path: str,
+    lora_scale: float,
+    prompt: str,
+    base_model_id: str,
+    controlnet_model_id: str,
+    canny_low: int,
+    canny_high: int,
+):
+    staged_input_dir, err = _save_debug_upload_image(upload_image)
+    out_dir = Path(output_dir).expanduser().resolve()
+
+    if err:
+        preview_img, preview_txt = _latest_image_from_folder(str(out_dir))
+        yield f"Failed: {err}", preview_img, preview_txt
+        return
+
+    first = True
+    for msg, preview_img, preview_txt in run_texture_augment_live(
+        input_dir=str(staged_input_dir),
+        output_dir=output_dir,
+        model_family=model_family,
+        strength=strength,
+        steps=steps,
+        guidance_scale=guidance_scale,
+        seed=seed,
+        controlnet_scale=controlnet_scale,
+        lora_path=lora_path,
+        lora_scale=lora_scale,
+        prompt=prompt,
+        base_model_id=base_model_id,
+        controlnet_model_id=controlnet_model_id,
+        canny_low=canny_low,
+        canny_high=canny_high,
+    ):
+        if first:
+            msg = f"Debug upload staged in: {staged_input_dir}\n\n{msg}"
+            first = False
+        yield msg, preview_img, preview_txt
 
 
 def run_texture_augment_live(
@@ -3305,6 +3387,11 @@ def build_ui() -> gr.Blocks:
                         value="",
                         placeholder="Path to LoRA directory or *.safetensors",
                     )
+                    diff_debug_upload_image = gr.Image(
+                        type="numpy",
+                        label="debug_upload_image (optional, for single-image test)",
+                        sources=["upload", "clipboard"],
+                    )
                     with gr.Row():
                         diff_strength = gr.Slider(
                             minimum=0.0,
@@ -3339,6 +3426,7 @@ def build_ui() -> gr.Blocks:
 
                     with gr.Row():
                         diff_run_btn = gr.Button("Run Texture Augmentation", variant="primary")
+                        diff_run_upload_btn = gr.Button("Run Texture Augmentation (Uploaded Image)")
                         diff_preview_btn = gr.Button("Preview Latest Output")
                 with gr.Column(scale=1):
                     diff_preview = gr.Image(type="numpy", label="Latest Augmented Output")
@@ -3388,6 +3476,27 @@ def build_ui() -> gr.Blocks:
                 fn=run_texture_augment_live,
                 inputs=[
                     diff_input_dir,
+                    diff_output_dir,
+                    diff_model_family,
+                    diff_strength,
+                    diff_steps,
+                    diff_guidance_scale,
+                    diff_seed,
+                    diff_controlnet_scale,
+                    diff_lora_path,
+                    diff_lora_scale,
+                    diff_prompt,
+                    diff_base_model_id,
+                    diff_controlnet_model_id,
+                    diff_canny_low,
+                    diff_canny_high,
+                ],
+                outputs=[diff_log, diff_preview, diff_preview_status],
+            )
+            diff_run_upload_btn.click(
+                fn=run_texture_augment_upload_live,
+                inputs=[
+                    diff_debug_upload_image,
                     diff_output_dir,
                     diff_model_family,
                     diff_strength,
