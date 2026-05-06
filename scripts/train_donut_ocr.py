@@ -7,6 +7,7 @@ import json
 import inspect
 import importlib
 import logging
+import math
 import os
 import random
 import re
@@ -22,6 +23,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import Dataset, Subset, get_worker_info
 try:
@@ -1922,6 +1924,33 @@ def _configure_image_processor(image_processor, image_size: int):
     except Exception as exc:
         LOGGER.warning("Could not update image processor pad/resize behavior: %s", exc)
 
+
+def _configure_image_processor_fixed_resize(image_processor, target_height: int, target_width: int) -> None:
+    """Force anisotropic resize to a fixed HxW canvas without padding."""
+    target_height = max(1, int(target_height))
+    target_width = max(1, int(target_width))
+    try:
+        image_processor.size = {"height": target_height, "width": target_width}
+    except Exception as exc:
+        LOGGER.warning(
+            "Could not set image processor fixed resize size to [%d,%d]: %s",
+            target_height,
+            target_width,
+            exc,
+        )
+    try:
+        if hasattr(image_processor, "do_resize"):
+            image_processor.do_resize = True
+        if hasattr(image_processor, "do_thumbnail"):
+            image_processor.do_thumbnail = False
+        if hasattr(image_processor, "do_pad"):
+            image_processor.do_pad = False
+        if hasattr(image_processor, "random_padding"):
+            image_processor.random_padding = False
+    except Exception as exc:
+        LOGGER.warning("Could not update image processor fixed resize flags: %s", exc)
+
+
 def _image_preprocess_pipeline_name(args) -> str:
     mode = str(getattr(args, "image_preprocess_pipeline", "none") or "none").strip().lower()
     # Backward-compatible alias: bdrc_no_bin -> gray
@@ -1974,6 +2003,29 @@ def _validate_report_to_backends(report_to: Sequence[str]) -> None:
             space or "<unset>",
             proj or "<unset>",
         )
+
+
+def _drop_trackio_callbacks(trainer) -> int:
+    """Remove Trackio callbacks after shutdown-like failures during final eval logging."""
+    handler = getattr(trainer, "callback_handler", None)
+    callbacks = list(getattr(handler, "callbacks", []) or [])
+    keep = []
+    removed = 0
+    for cb in callbacks:
+        cls = cb.__class__
+        needle = f"{getattr(cls, '__module__', '')}.{getattr(cls, '__name__', '')}".lower()
+        if "trackio" in needle:
+            removed += 1
+            continue
+        keep.append(cb)
+    if removed and handler is not None:
+        handler.callbacks = keep
+    return removed
+
+
+def _is_trackio_not_initialized_error(exc: BaseException) -> bool:
+    msg = str(exc)
+    return "trackio.init()" in msg and "trackio.log()" in msg
 
 
 def finalize_pecha_geometry(image: Image.Image, target_w: int, target_h: int) -> Image.Image:
@@ -2084,6 +2136,20 @@ def _encoder_pos_embeddings_are_square_grid(model) -> bool:
     return int(s * s) == int(n)
 
 
+def _encoder_position_embedding_count(model) -> Optional[int]:
+    """Return the total encoder position embedding count, including CLS."""
+    enc = getattr(model, "encoder", None)
+    if enc is None:
+        return None
+    try:
+        pos = getattr(getattr(enc, "embeddings", None), "position_embeddings", None)
+    except Exception:
+        pos = None
+    if not torch.is_tensor(pos) or pos.ndim != 3:
+        return None
+    return int(pos.shape[1])
+
+
 def _set_encoder_patch_image_size(model, target_h: int, target_w: int) -> None:
     """Keep ViT patch embedding geometry in sync with letterboxed input size."""
     enc = getattr(model, "encoder", None)
@@ -2108,6 +2174,204 @@ def _set_encoder_patch_image_size(model, target_h: int, target_w: int) -> None:
             patch_embeddings.num_patches = int(nh * nw)
     except Exception:
         pass
+
+
+def _infer_patch_grid(num_patches: int, *, target_h: int, target_w: int) -> Optional[Tuple[int, int]]:
+    num_patches = int(num_patches)
+    if num_patches <= 0:
+        return None
+    square = int(round(float(num_patches) ** 0.5))
+    if square * square == num_patches:
+        return square, square
+
+    target_ratio = max(1e-9, float(target_h) / max(1.0, float(target_w)))
+    best: Optional[Tuple[int, int]] = None
+    best_score = float("inf")
+    limit = int(math.sqrt(num_patches)) + 1
+    for h in range(1, limit + 1):
+        if num_patches % h != 0:
+            continue
+        for gh, gw in ((h, num_patches // h), (num_patches // h, h)):
+            ratio = float(gh) / max(1.0, float(gw))
+            score = abs(math.log(max(1e-9, ratio) / target_ratio))
+            if score < best_score:
+                best_score = score
+                best = (int(gh), int(gw))
+    return best
+
+
+def _target_patch_grid(model, target_h: int, target_w: int) -> Optional[Tuple[int, int]]:
+    enc = getattr(model, "encoder", None)
+    patch_embeddings = getattr(getattr(getattr(enc, "embeddings", None), "patch_embeddings", None), "patch_size", None)
+    if patch_embeddings is None:
+        patch_embeddings = (16, 16)
+    try:
+        if isinstance(patch_embeddings, int):
+            ph, pw = int(patch_embeddings), int(patch_embeddings)
+        else:
+            ph, pw = int(patch_embeddings[0]), int(patch_embeddings[1])
+    except Exception:
+        ph, pw = 16, 16
+    ph = max(1, int(ph))
+    pw = max(1, int(pw))
+    return max(1, int(target_h) // ph), max(1, int(target_w) // pw)
+
+
+def _load_local_checkpoint_tensor(model_name_or_path: str, tensor_name: str) -> Optional[torch.Tensor]:
+    try:
+        root = Path(str(model_name_or_path)).expanduser()
+    except Exception:
+        return None
+    if not root.exists() or not root.is_dir():
+        return None
+
+    candidates: List[Path] = []
+    for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        index_path = root / index_name
+        if not index_path.exists():
+            continue
+        try:
+            index_data = json.loads(index_path.read_text(encoding="utf-8"))
+            filename = (index_data.get("weight_map") or {}).get(tensor_name)
+            if filename:
+                candidates.append(root / str(filename))
+        except Exception as exc:
+            LOGGER.warning("Could not inspect checkpoint index %s: %s", index_path, exc)
+
+    candidates.extend(
+        [
+            root / "model.safetensors",
+            root / "pytorch_model.bin",
+        ]
+    )
+
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen or not path.exists():
+            continue
+        seen.add(key)
+        try:
+            if path.suffix == ".safetensors":
+                from safetensors import safe_open  # type: ignore
+
+                with safe_open(str(path), framework="pt", device="cpu") as handle:
+                    if tensor_name in set(handle.keys()):
+                        return handle.get_tensor(tensor_name)
+            else:
+                state = torch.load(str(path), map_location="cpu")
+                if isinstance(state, dict):
+                    for container_key in ("state_dict", "model"):
+                        nested = state.get(container_key)
+                        if isinstance(nested, dict) and tensor_name in nested:
+                            tensor = nested[tensor_name]
+                            return tensor.detach().cpu() if torch.is_tensor(tensor) else None
+                    tensor = state.get(tensor_name)
+                    return tensor.detach().cpu() if torch.is_tensor(tensor) else None
+        except Exception as exc:
+            LOGGER.warning("Could not read tensor %s from %s: %s", tensor_name, path, exc)
+    return None
+
+
+def _resize_position_embeddings_tensor(
+    source: torch.Tensor,
+    *,
+    target_grid: Tuple[int, int],
+    target_device: torch.device,
+    target_dtype: torch.dtype,
+) -> Optional[torch.Tensor]:
+    if not torch.is_tensor(source) or source.ndim != 3 or int(source.shape[0]) != 1:
+        return None
+    target_gh, target_gw = int(target_grid[0]), int(target_grid[1])
+    target_tokens = int(target_gh * target_gw)
+    if int(source.shape[1]) == target_tokens + 1:
+        return source.to(device=target_device, dtype=target_dtype)
+
+    source_tokens = int(source.shape[1]) - 1
+    source_grid = _infer_patch_grid(source_tokens, target_h=target_gh, target_w=target_gw)
+    if source_grid is None:
+        return None
+    source_gh, source_gw = source_grid
+    if int(source_gh * source_gw) != source_tokens:
+        return None
+
+    cls_pos = source[:, :1, :]
+    patch_pos = source[:, 1:, :]
+    dim = int(patch_pos.shape[-1])
+    patch_pos = patch_pos.reshape(1, source_gh, source_gw, dim).permute(0, 3, 1, 2).float()
+    patch_pos = F.interpolate(
+        patch_pos,
+        size=(target_gh, target_gw),
+        mode="bicubic",
+        align_corners=False,
+    )
+    patch_pos = patch_pos.permute(0, 2, 3, 1).reshape(1, target_tokens, dim)
+    resized = torch.cat([cls_pos.float(), patch_pos], dim=1)
+    return resized.to(device=target_device, dtype=target_dtype)
+
+
+def _materialize_encoder_position_embeddings(
+    model,
+    *,
+    target_h: int,
+    target_w: int,
+    checkpoint_source: str = "",
+) -> bool:
+    enc = getattr(model, "encoder", None)
+    embeddings = getattr(enc, "embeddings", None)
+    pos = getattr(embeddings, "position_embeddings", None)
+    if embeddings is None or not torch.is_tensor(pos) or pos.ndim != 3:
+        return False
+
+    target_grid = _target_patch_grid(model, int(target_h), int(target_w))
+    if target_grid is None:
+        return False
+    target_tokens = int(target_grid[0] * target_grid[1]) + 1
+
+    checkpoint_pos = _load_local_checkpoint_tensor(
+        checkpoint_source,
+        "encoder.embeddings.position_embeddings",
+    )
+    source = checkpoint_pos if torch.is_tensor(checkpoint_pos) else pos.detach()
+    if int(pos.shape[1]) == target_tokens and (
+        not torch.is_tensor(checkpoint_pos) or int(checkpoint_pos.shape[1]) == target_tokens
+    ):
+        return False
+
+    resized = _resize_position_embeddings_tensor(
+        source.detach().cpu(),
+        target_grid=target_grid,
+        target_device=pos.device,
+        target_dtype=pos.dtype,
+    )
+    if resized is None or int(resized.shape[1]) != target_tokens:
+        LOGGER.warning(
+            "Could not materialize encoder position embeddings for target=%dx%d from source_shape=%s",
+            int(target_h),
+            int(target_w),
+            tuple(int(x) for x in source.shape) if torch.is_tensor(source) else None,
+        )
+        return False
+
+    embeddings.position_embeddings = nn.Parameter(resized)
+    try:
+        position_ids = torch.arange(target_tokens, device=resized.device).expand((1, -1))
+        if "position_ids" in getattr(embeddings, "_buffers", {}):
+            embeddings._buffers["position_ids"] = position_ids
+        elif hasattr(embeddings, "position_ids"):
+            embeddings.position_ids = position_ids
+    except Exception:
+        pass
+    LOGGER.info(
+        "Materialized encoder position embeddings for target=%dx%d patches=%dx%d source_shape=%s new_shape=%s",
+        int(target_h),
+        int(target_w),
+        int(target_grid[0]),
+        int(target_grid[1]),
+        tuple(int(x) for x in source.shape),
+        tuple(int(x) for x in resized.shape),
+    )
+    return True
 
 
 def _relax_determinism_for_interpolate_pos_encoding() -> None:
@@ -2858,6 +3122,9 @@ def run(args) -> Dict[str, object]:
     _dist_barrier()
 
     enable_letterboxing = bool(getattr(args, "enable_letterboxing", False))
+    enable_fixed_resize = bool(getattr(args, "enable_fixed_resize", False))
+    if enable_letterboxing and enable_fixed_resize:
+        raise ValueError("--enable_letterboxing and --enable_fixed_resize are mutually exclusive.")
     target_width = max(1, int(getattr(args, "target_width", 2560) or 2560))
     target_height = max(1, int(getattr(args, "target_height", 320) or 320))
 
@@ -2869,11 +3136,14 @@ def run(args) -> Dict[str, object]:
             image_processor.size = {"height": int(target_height), "width": int(target_width)}
         except Exception as exc:
             LOGGER.warning("Could not set image processor letterbox size to [%d,%d]: %s", int(target_height), int(target_width), exc)
+    elif enable_fixed_resize:
+        _configure_image_processor_fixed_resize(image_processor, int(target_height), int(target_width))
     image_preproc_mode = _image_preprocess_pipeline_name(args)
     LOGGER.info("Donut OCR image preprocessing pipeline: %s", image_preproc_mode)
     LOGGER.info(
-        "Donut OCR letterboxing: enabled=%s target_height=%d target_width=%d",
+        "Donut OCR geometry: letterboxing=%s fixed_resize=%s target_height=%d target_width=%d",
         bool(enable_letterboxing),
+        bool(enable_fixed_resize),
         int(target_height),
         int(target_width),
     )
@@ -2899,13 +3169,44 @@ def run(args) -> Dict[str, object]:
         pass
     _set_encoder_patch_image_size(model, int(target_height), int(target_width))
     encoder_supports_interp = _encoder_supports_interpolate_pos_encoding(model)
+    use_target_geometry = bool(enable_letterboxing or enable_fixed_resize)
+    materialized_pos = False
+    if use_target_geometry:
+        materialized_pos = _materialize_encoder_position_embeddings(
+            model,
+            target_h=int(target_height),
+            target_w=int(target_width),
+            checkpoint_source=str(args.model_name_or_path),
+        )
+    target_grid = _target_patch_grid(model, int(target_height), int(target_width)) if use_target_geometry else None
+    target_pos_tokens = (
+        int(target_grid[0] * target_grid[1]) + 1
+        if target_grid is not None
+        else None
+    )
+    encoder_pos_tokens = _encoder_position_embedding_count(model)
+    encoder_pos_matches_target = bool(
+        target_pos_tokens is not None
+        and encoder_pos_tokens is not None
+        and int(encoder_pos_tokens) == int(target_pos_tokens)
+    )
     encoder_pos_is_square = _encoder_pos_embeddings_are_square_grid(model)
     force_interpolate_pos_encoding = bool(
-        enable_letterboxing
+        use_target_geometry
         and encoder_supports_interp
         and encoder_pos_is_square
+        and not materialized_pos
+        and not encoder_pos_matches_target
     )
-    if bool(enable_letterboxing) and bool(encoder_supports_interp) and not bool(encoder_pos_is_square):
+    if bool(use_target_geometry) and bool(encoder_supports_interp) and bool(encoder_pos_matches_target) and not bool(materialized_pos):
+        LOGGER.info(
+            "Disabled interpolate_pos_encoding because encoder position embeddings already match "
+            "the target patch count (position_tokens=%d target_height=%d target_width=%d).",
+            int(encoder_pos_tokens or 0),
+            int(target_height),
+            int(target_width),
+        )
+    if bool(use_target_geometry) and bool(encoder_supports_interp) and not bool(encoder_pos_is_square):
         LOGGER.info(
             "Disabled interpolate_pos_encoding because loaded encoder position embeddings are non-square "
             "(already adapted checkpoint)."
@@ -3033,7 +3334,7 @@ def run(args) -> Dict[str, object]:
         model.generation_config.min_new_tokens = int(gen_min_new_tokens)
     else:
         try:
-            model.generation_config.min_new_tokens = 0
+            model.generation_config.min_new_tokens = None
         except Exception:
             pass
     LOGGER.info(
@@ -3641,7 +3942,18 @@ def run(args) -> Dict[str, object]:
 
     metrics: Dict[str, object] = dict(train_result.metrics or {})
     if has_eval:
-        eval_metrics = trainer.evaluate()
+        try:
+            eval_metrics = trainer.evaluate()
+        except RuntimeError as exc:
+            if not _is_trackio_not_initialized_error(exc):
+                raise
+            removed = _drop_trackio_callbacks(trainer)
+            LOGGER.warning(
+                "Final eval logging hit an uninitialized Trackio callback after training; "
+                "removed %d Trackio callback(s) and retrying final eval without Trackio logging.",
+                int(removed),
+            )
+            eval_metrics = trainer.evaluate()
         metrics.update({f"eval_{k}": v for k, v in eval_metrics.items()})
 
     summary = {

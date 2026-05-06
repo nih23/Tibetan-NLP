@@ -168,40 +168,102 @@ def _build_readme(repo_id: str, ckpt: Path, preprocess_pipeline: str, has_repro:
     lines = [
         f"# {repo_id.split('/')[-1]}",
         "",
-        "Tibetan OCR model (DONUT / VisionEncoderDecoder architecture) trained with PechaBridge.",
+        "Tibetan OCR model (~200M parameters, DONUT / VisionEncoderDecoder architecture) "
+        "fine-tuned on Tibetan pecha line images with PechaBridge.",
         "",
-        "## Usage",
+        "> **Important:** This model requires a custom BDRC-style grayscale preprocessing "
+        "pipeline (adaptive binarization, background normalisation, aspect-preserving resize "
+        "and padding). Using `AutoImageProcessor` directly will apply standard ImageNet "
+        "normalisation and produce poor results. **Use PechaBridge's `batch-ocr` CLI** "
+        "for correct end-to-end inference.",
+        "",
+        "## Recommended usage — PechaBridge CLI",
+        "",
+        "```bash",
+        "# 1. Clone PechaBridge and install dependencies",
+        "git clone https://github.com/CodexAITeam/PechaBridge.git && cd PechaBridge",
+        "pip install -r requirements.txt",
+        "",
+        "# 2. Download this model (and the line segmentation model)",
+        "python cli.py download-models",
+        "",
+        "# 3a. Run batch OCR on a folder of pecha page images",
+        "python cli.py batch-ocr \\",
+        "    --ocr-model     models/ocr/PechaBridgeOCR \\",
+        "    --line-model    models/line_segmentation/PechaBridgeLineSegmentation.pt \\",
+        "    --layout-engine yolo_line \\",
+        "    --ocr-engine    donut \\",
+        "    --input-dir     /path/to/pecha/images",
+        "",
+        "# 3b. Or use the BDRC layout engine (auto-downloads BDRC line models)",
+        "python cli.py batch-ocr \\",
+        "    --ocr-model     models/ocr/PechaBridgeOCR \\",
+        "    --layout-engine bdrc_line \\",
+        "    --ocr-engine    donut \\",
+        "    --input-dir     /path/to/pecha/images",
+        "",
+        "# 3c. Download + OCR a Staatsbibliothek zu Berlin pecha in one command",
+        "python cli.py batch-ocr \\",
+        "    --ppn           337138764X \\",
+        "    --ocr-model     models/ocr/PechaBridgeOCR \\",
+        "    --layout-engine bdrc_line \\",
+        "    --ocr-engine    donut",
+        "```",
+        "",
+        "Each image produces a `.txt` transcript and an `*_overlay.jpg` with detected "
+        "line boxes drawn on the source image.",
+        "",
+        "## Advanced: standalone Python usage",
+        "",
+        "If you need to call the model directly from Python, you must apply the BDRC-style "
+        "preprocessing manually before passing pixel values to the model. "
+        "See `pechabridge/ocr/preprocess_bdrc.py` in the PechaBridge repository for the "
+        f"full preprocessing pipeline (`{preprocess_pipeline}` pipeline was used for this checkpoint).",
         "",
         "```python",
-        "from transformers import AutoImageProcessor, VisionEncoderDecoderModel, AutoTokenizer",
+        "# Minimal example — BDRC gray preprocessing applied explicitly",
+        "import torch",
+        "from transformers import VisionEncoderDecoderModel, AutoTokenizer",
+        "from pechabridge.ocr.preprocess_bdrc import (",
+        "    BDRCPreprocessConfig,",
+        "    preprocess_image_bdrc,       # returns grayscale PIL Image (mode 'L')",
+        "    bdrc_image_to_normalized_tensor,  # grayscale PIL → float32 HW in [-1, 1]",
+        ")",
         "from PIL import Image",
+        "import numpy as np",
         "",
         f'model = VisionEncoderDecoderModel.from_pretrained("{repo_id}")',
         f'tokenizer = AutoTokenizer.from_pretrained("{repo_id}")',
-        f'image_processor = AutoImageProcessor.from_pretrained("{repo_id}")',
         "",
+        "# 1. Load the line crop as RGB",
         "image = Image.open('line_crop.png').convert('RGB')",
-        "pixel_values = image_processor(images=image, return_tensors='pt').pixel_values",
+        "",
+        "# 2. Apply BDRC preprocessing:",
+        "#    - converts to grayscale (luma by default)",
+        "#    - optionally normalises background, binarises, pads/resizes",
+        "#    Returns a grayscale PIL Image (mode 'L')",
+        "cfg = BDRCPreprocessConfig.ocr_line_defaults()  # defaults used during training",
+        "gray_pil = preprocess_image_bdrc(image, cfg)",
+        "",
+        "# 3. Normalise to float32 in [-1, 1] and build a 3-channel tensor",
+        "#    (model expects C=3; replicate the single gray channel)",
+        "gray_hw = bdrc_image_to_normalized_tensor(image, cfg)  # shape: (H, W), float32",
+        "pixel_values = torch.tensor(gray_hw).unsqueeze(0).unsqueeze(0)  # (1, 1, H, W)",
+        "pixel_values = pixel_values.expand(-1, 3, -1, -1)               # (1, 3, H, W)",
+        "",
         "generated_ids = model.generate(pixel_values)",
         "text = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]",
         "```",
         "",
-        "## Details",
+        "## Model details",
         "",
         f"- **Checkpoint**: `{ckpt.name}`" + (f" ({step})" if step else ""),
         f"- **Image preprocessing pipeline**: `{preprocess_pipeline}`",
-        f"- **Repro bundle included**: {'yes' if has_repro else 'no'}",
-        "",
-        "## PechaBridge",
-        "",
-        "Trained with [PechaBridge](https://github.com/OpenPecha/PechaBridge).",
-        "",
-        "```bash",
-        "python cli.py batch-ocr \\",
-        f'    --ocr-model {repo_id} \\',
-        "    --input-dir /path/to/images \\",
-        "    --engine donut",
-        "```",
+        f"- **Repro bundle included**: {'yes — preprocessing config is in `repro/`' if has_repro else 'no'}",
+        "- **Architecture**: Swin Transformer encoder (hidden_size=768, 12 layers) + "
+        "BART decoder (d_model=1024, 12 layers), ~200M parameters total",
+        "- **Training framework**: [PechaBridge](https://github.com/CodexAITeam/PechaBridge)",
+        "- **Training data**: Tibetan pecha line images from OpenPecha and BDRC collections",
     ]
     return "\n".join(lines) + "\n"
 
@@ -283,6 +345,90 @@ def _upload_file_with_progress(
 # ---------------------------------------------------------------------------
 # Main upload logic
 # ---------------------------------------------------------------------------
+
+def update_model_card(
+    checkpoint_path: str,
+    repo_id: str,
+    token: str,
+    *,
+    dry_run: bool = False,
+    commit_message: str = "",
+) -> None:
+    """Push only the README.md (model card) to an existing HF repo.
+
+    This is useful for updating the model card without re-uploading the full
+    model weights.  The preprocessing pipeline is read from the repro bundle
+    if present, otherwise defaults to 'bdrc'.
+    """
+    try:
+        from huggingface_hub import HfApi
+    except ImportError:
+        print(
+            "ERROR: huggingface_hub is not installed.\n"
+            "Install it with:  pip install huggingface-hub",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    ckpt = Path(checkpoint_path).expanduser().resolve()
+    has_repro = (ckpt / "repro").is_dir()
+    preprocess_pipeline = _read_repro_preprocess_pipeline(ckpt) or "bdrc"
+
+    readme_content = _build_readme(
+        repo_id=repo_id,
+        ckpt=ckpt,
+        preprocess_pipeline=preprocess_pipeline,
+        has_repro=has_repro,
+    )
+
+    print(f"\n{'='*60}")
+    print(f"  Update HF Model Card (README only)")
+    print(f"{'='*60}")
+    print(f"  Checkpoint : {ckpt}")
+    print(f"  Repo ID    : {repo_id}")
+    print(f"  Dry-run    : {dry_run}")
+    print(f"{'='*60}\n")
+
+    if dry_run:
+        print("--- README.md (dry-run, not uploaded) ---")
+        print(readme_content)
+        print("-----------------------------------------")
+        return
+
+    import tempfile
+    api = HfApi(token=token or None)
+    msg = commit_message or "Update model card (README.md) via PechaBridge"
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False, encoding="utf-8") as f:
+        f.write(readme_content)
+        tmp_path = Path(f.name)
+    try:
+        # Use path string directly — HF API requires a seekable file-like object
+        # or a plain path; _upload_file_with_progress wraps in a non-seekable reader.
+        print(f"  Uploading README.md ({tmp_path.stat().st_size} bytes) …")
+        api.upload_file(
+            path_or_fileobj=str(tmp_path),
+            path_in_repo="README.md",
+            repo_id=repo_id,
+            repo_type="model",
+            commit_message=msg,
+        )
+        print(f"\n✓ Model card updated: https://huggingface.co/{repo_id}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+
+def _read_repro_preprocess_pipeline(ckpt: Path) -> Optional[str]:
+    """Read the preprocessing pipeline name from a repro bundle if present."""
+    import json
+    repro_file = ckpt / "repro" / "image_preprocess.json"
+    if repro_file.exists():
+        try:
+            data = json.loads(repro_file.read_text(encoding="utf-8"))
+            return str(data.get("pipeline") or data.get("preprocess_pipeline") or "").strip() or None
+        except Exception:
+            pass
+    return None
+
 
 def upload_donut_checkpoint(
     checkpoint_path: str,
@@ -449,9 +595,9 @@ def upload_donut_checkpoint(
     print(f"{'='*60}")
     print(f"\nTo use it with PechaBridge:")
     print(f"  python cli.py batch-ocr \\")
-    print(f"      --ocr-model {repo_id} \\")
-    print(f"      --input-dir /path/to/images \\")
-    print(f"      --engine donut")
+    print(f"      --ocr-model  {repo_id} \\")
+    print(f"      --input-dir  /path/to/images \\")
+    print(f"      --ocr-engine donut")
 
 
 # ---------------------------------------------------------------------------
@@ -552,6 +698,17 @@ Examples:
         help="Show what would be uploaded without actually uploading anything.",
     )
     parser.add_argument(
+        "--readme-only",
+        "--readme_only",
+        dest="readme_only",
+        action="store_true",
+        default=False,
+        help=(
+            "Only update the README.md (model card) on HF — do not re-upload model weights. "
+            "Useful for fixing the model card without a full re-upload."
+        ),
+    )
+    parser.add_argument(
         "--commit-message",
         default="",
         metavar="MSG",
@@ -581,14 +738,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         )
         return 1
 
-    upload_donut_checkpoint(
-        checkpoint_path=args.checkpoint,
-        repo_id=args.repo_id,
-        token=token,
-        private=args.private,
-        dry_run=args.dry_run,
-        commit_message=args.commit_message,
-    )
+    if getattr(args, "readme_only", False):
+        update_model_card(
+            checkpoint_path=args.checkpoint,
+            repo_id=args.repo_id,
+            token=token,
+            dry_run=args.dry_run,
+            commit_message=args.commit_message,
+        )
+    else:
+        upload_donut_checkpoint(
+            checkpoint_path=args.checkpoint,
+            repo_id=args.repo_id,
+            token=token,
+            private=args.private,
+            dry_run=args.dry_run,
+            commit_message=args.commit_message,
+        )
     return 0
 
 

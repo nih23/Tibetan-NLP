@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
-from ui_workbench import (
+from scripts.ui_workbench import (
     _cer_single_ui,
     _get_or_build_line_clip_debug_corpus_ui,
     _line_clip_debug_cache_key,

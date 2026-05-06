@@ -16,7 +16,7 @@ try:
 except Exception:
     tqdm = None
 
-from ui_workbench import (
+from scripts.ui_workbench import (
     _get_or_build_line_clip_debug_corpus_ui,
     scan_line_clip_dual_models_ui,
 )

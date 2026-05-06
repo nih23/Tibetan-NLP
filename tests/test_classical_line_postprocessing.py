@@ -1,7 +1,7 @@
 import pytest
 
 
-ui_workbench = pytest.importorskip("ui_workbench")
+ui_workbench = pytest.importorskip("scripts.ui_workbench")
 
 
 def test_filter_line_boxes_by_mean_height_removes_large_outlier() -> None:

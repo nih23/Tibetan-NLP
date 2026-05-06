@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Hilfsfunktionen für die Verarbeitung von Bildern und OCR.
-Enthält gemeinsam genutzte Funktionen für inference_sbb.py und ocr_on_detections.py.
+Enthält gemeinsam genutzte Funktionen für scripts/inference_sbb.py und scripts/ocr_on_detections.py.
 """
 
 import os

@@ -20,14 +20,14 @@ Usage examples::
 
     # Tesseract engine (no --ocr-model needed)
     python cli.py batch-ocr \\
-        --engine       tesseract \\
+        --ocr-engine   tesseract \\
         --layout-model models/layout/yolo_layout.pt \\
         --input-dir    /data/pechas/W1234 \\
         --tess-lang    bod
 
     # BDRC OCR + BDRC line model
     python cli.py batch-ocr \\
-        --engine          bdrc_ocr \\
+        --ocr-engine      bdrc_ocr \\
         --layout-engine   bdrc_line \\
         --bdrc-ocr-model  models/bdrc/ocr/Woodblock \\
         --bdrc-line-model models/bdrc/Models/Lines \\
@@ -39,19 +39,24 @@ Output is written to a subfolder of the input directory's parent::
     /data/pechas/W1234__checkpoint-5000/
         repro.yaml
         image_001.txt
+        image_001_overlay.jpg   ← line-box overlay (saved by default)
         ...
 
     # BDRC OCR:
     /data/pechas/W1234__bdrc_ocr_Woodblock/
         repro.yaml
         image_001.txt
+        image_001_overlay.jpg
         ...
 
     # Tesseract:
     /data/pechas/W1234__tesseract_bod/
         repro.yaml
         image_001.txt
+        image_001_overlay.jpg
         ...
+
+Pass ``--no-save-overlay`` to skip saving the overlay images.
 """
 
 from __future__ import annotations
@@ -346,9 +351,19 @@ def _load_bdrc_ocr_runtime(
 
 def _ensure_default_bdrc_line_model_dir() -> Tuple[str, str]:
     from pechabridge.ocr.bdrc_model_download import ensure_default_bdrc_line_assets
+    from pechabridge.ocr.bdrc_inference import find_bdrc_line_model_dirs
 
     result = ensure_default_bdrc_line_assets(REPO_ROOT / "models" / "bdrc")
-    chosen = str(result.line_dir)
+    # Mirror the UI's auto-selection logic: find_bdrc_line_model_dirs() returns all
+    # valid BDRC line/layout model dirs sorted alphabetically. The UI picks the first
+    # one, which is models/bdrc/Layout/ (photi.onnx, multi-class layout model) because
+    # "Layout" sorts before "Lines". The Layout model produces significantly better
+    # results on Tibetan pecha pages than the binary Lines model (PhotiLines.onnx).
+    found = find_bdrc_line_model_dirs(result.root)
+    if found:
+        chosen = str(found[0])
+    else:
+        chosen = str(result.line_dir)
     if result.downloaded_items:
         note = f"Auto-downloaded default BDRC line assets ({', '.join(result.downloaded_items)}) to {result.root}"
     else:
@@ -472,7 +487,7 @@ def _detect_lines_classical(
     device: str,
 ) -> List[Dict[str, Any]]:
     """Run YOLO-based layout detection and return sorted line records."""
-    from ui_workbench import run_tibetan_text_line_split_classical
+    from scripts.ui_workbench import run_tibetan_text_line_split_classical
 
     split_out = run_tibetan_text_line_split_classical(
         image=image_np,
@@ -554,19 +569,25 @@ def _detect_lines_bdrc(
     bbox_tolerance: float,
     class_threshold: float,
     merge_lines: bool,
+    use_rotation: bool,
     use_tps: bool,
     tps_threshold: float,
 ) -> List[Dict[str, Any]]:
     from pechabridge.ocr.bdrc_inference import predict_bdrc_line_regions
 
+    # 0.0 means "use library default" (0.9 for line models, 0.8 for layout models).
+    # Passing 0.0 explicitly would accept every pixel as a line — massively over-detecting.
+    effective_threshold: Optional[float] = float(class_threshold) if float(class_threshold) > 0.0 else None
+
     predictions, _debug = predict_bdrc_line_regions(
         image_np,
         model_path=bdrc_line_model_path,
         device=device,
-        class_threshold=class_threshold,
+        class_threshold=effective_threshold,
         group_lines=bool(merge_lines),
         k_factor=k_factor,
         bbox_tolerance=bbox_tolerance,
+        use_rotation=bool(use_rotation),
         use_tps=bool(use_tps),
         tps_threshold=float(tps_threshold),
     )
@@ -692,6 +713,68 @@ def _normalize_box(
 
 
 # ---------------------------------------------------------------------------
+# Line-box overlay renderer (mirrors ui_ocr_workbench._render_overlay)
+# ---------------------------------------------------------------------------
+
+def _render_line_box_overlay(
+    image_np: Any,  # np.ndarray HxWx3 uint8
+    line_records: List[Dict[str, Any]],
+) -> Any:  # PIL Image RGB
+    """Render detected line bounding boxes onto the source image.
+
+    Draws a cyan double-stroke rectangle and a numbered label for every
+    detected line, exactly as the OCR Workbench UI does.  Returns a PIL
+    ``Image`` in RGB mode so the caller can save it in any format.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+
+    panel = Image.fromarray(np.asarray(image_np).astype(np.uint8)).convert("RGB")
+    draw = ImageDraw.Draw(panel)
+
+    # Load a small font; fall back to the built-in bitmap font if unavailable.
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", 13)
+    except Exception:
+        font = ImageFont.load_default()
+
+    def _draw_strong_rect(
+        box: List[int],
+        color: Tuple[int, int, int],
+        inner_width: int = 4,
+        outer_width: int = 8,
+    ) -> None:
+        x1, y1, x2, y2 = [int(v) for v in box]
+        draw.rectangle((x1, y1, x2, y2), outline=(0, 0, 0), width=max(2, int(outer_width)))
+        draw.rectangle((x1, y1, x2, y2), outline=color, width=max(2, int(inner_width)))
+
+    # Sort records top-to-bottom before numbering (same order as transcript)
+    sorted_records = sorted(
+        line_records,
+        key=lambda r: (
+            int((r.get("line_box") or [0, 0, 0, 0])[1]),
+            int((r.get("line_box") or [0, 0, 0, 0])[0]),
+        ),
+    )
+
+    for i, rec in enumerate(sorted_records, start=1):
+        box = rec.get("line_box")
+        if not box or len(box) < 4:
+            continue
+        x1, y1, x2, y2 = [int(v) for v in box[:4]]
+        _draw_strong_rect([x1, y1, x2, y2], color=(0, 255, 255), inner_width=4, outer_width=8)
+        tag = f"line {i}"
+        tx1 = x1 + 2
+        ty1 = max(0, y1 - 20)
+        tx2 = x1 + 18 + 8 * len(tag)
+        ty2 = max(16, y1 - 2)
+        draw.rectangle((tx1, ty1, tx2, ty2), fill=(0, 0, 0))
+        draw.rectangle((tx1, ty1, tx2, ty2), outline=(0, 255, 255), width=2)
+        draw.text((tx1 + 4, ty1 + 2), tag, fill=(255, 255, 255), font=font)
+
+    return panel
+
+
+# ---------------------------------------------------------------------------
 # Per-image OCR
 # ---------------------------------------------------------------------------
 
@@ -711,12 +794,17 @@ def _ocr_image(
     bdrc_line_bbox_tolerance: float = 3.0,
     bdrc_line_class_threshold: float = 0.0,
     bdrc_line_merge_lines: bool = True,
-    bdrc_line_use_tps: bool = True,
+    bdrc_line_use_rotation: bool = False,
+    bdrc_line_use_tps: bool = False,
     bdrc_line_tps_threshold: float = 0.25,
-) -> Tuple[str, int]:
+) -> Tuple[str, int, Any, List[Dict[str, Any]]]:
     """Run full OCR on a single image.
 
-    Returns ``(transcript_text, line_count)``.
+    Returns ``(transcript_text, line_count, image_np, line_records)``.
+
+    ``image_np`` is the original image as a ``np.ndarray`` (HxWx3 uint8) and
+    ``line_records`` is the list of detected line dicts (each with a
+    ``"line_box"`` key) so the caller can render an overlay image.
 
     ``layout_engine`` controls how line bounding boxes are detected:
     - ``"cv"``        (default) Classical CV segmentation via
@@ -750,6 +838,7 @@ def _ocr_image(
             bbox_tolerance=bdrc_line_bbox_tolerance,
             class_threshold=bdrc_line_class_threshold,
             merge_lines=bdrc_line_merge_lines,
+            use_rotation=bdrc_line_use_rotation,
             use_tps=bdrc_line_use_tps,
             tps_threshold=bdrc_line_tps_threshold,
         )
@@ -761,11 +850,17 @@ def _ocr_image(
     )
 
     lines: List[Tuple[int, int, str]] = []  # (y1, line_id, text)
+    valid_records: List[Dict[str, Any]] = []  # records that passed box validation
     for rec in line_records:
         box = _normalize_box(rec.get("line_box") or [], w, h)
         if box is None:
             continue
         x1, y1, x2, y2 = box
+        # Store the normalised box back so the overlay uses clipped coordinates
+        rec_with_norm = dict(rec)
+        rec_with_norm["line_box"] = list(box)
+        valid_records.append(rec_with_norm)
+
         crop_np = rec.get("ocr_crop")
         if not isinstance(crop_np, np.ndarray) or crop_np.size == 0:
             crop_np = img_np[y1:y2, x1:x2]
@@ -784,7 +879,7 @@ def _ocr_image(
     # Sort top-to-bottom, then left-to-right by line_id as tiebreaker
     lines.sort(key=lambda t: (t[0], t[1]))
     transcript = "\n".join(t for _, _, t in lines)
-    return transcript, len(lines)
+    return transcript, len(lines), img_np, valid_records
 
 
 # ---------------------------------------------------------------------------
@@ -880,12 +975,71 @@ def _yaml_str(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 def run(args: argparse.Namespace) -> int:
-    engine = str(getattr(args, "engine", "donut") or "donut").strip().lower()
+    engine = str(getattr(args, "ocr_engine", None) or getattr(args, "engine", "donut") or "donut").strip().lower()
     layout_engine = str(getattr(args, "layout_engine", "cv") or "cv").strip().lower()
     layout_model = str(getattr(args, "layout_model", "") or "").strip()
     line_model = str(getattr(args, "line_model", "") or "").strip()
     bdrc_line_model = str(getattr(args, "bdrc_line_model", "") or "").strip()
-    input_dir = Path(args.input_dir).expanduser().resolve()
+
+    # --- SBB download (--ppn) ---
+    ppn_raw = str(getattr(args, "ppn", "") or "").strip()
+    if ppn_raw:
+        ppn = ppn_raw[3:] if ppn_raw.upper().startswith("PPN") else ppn_raw
+        sbb_output_dir = str(getattr(args, "sbb_output_dir", "") or "").strip() or f"sbb_images/{ppn}"
+        sbb_max_pages = int(getattr(args, "sbb_max_pages", 0) or 0)
+        sbb_workers = int(getattr(args, "sbb_workers", 8) or 8)
+        sbb_verify_ssl = bool(getattr(args, "sbb_verify_ssl", True))
+        sbb_force = bool(getattr(args, "sbb_force_download", False))
+
+        # Skip download if images are already present (unless --sbb-force-download)
+        _sbb_dir = Path(sbb_output_dir).expanduser().resolve()
+        _already_downloaded = (
+            _sbb_dir.is_dir()
+            and (_sbb_dir / "metadata.json").exists()
+            and any(
+                p.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+                for p in _sbb_dir.iterdir()
+                if p.is_file()
+            )
+        )
+        if _already_downloaded and not sbb_force:
+            LOGGER.info(
+                "SBB images already present in %s — skipping download. "
+                "Use --sbb-force-download to re-download.",
+                _sbb_dir,
+            )
+        else:
+            if sbb_force and _already_downloaded:
+                LOGGER.info("--sbb-force-download set — re-downloading SBB images for PPN %s …", ppn)
+            else:
+                LOGGER.info("PPN provided — downloading SBB images for PPN %s into %s …", ppn, sbb_output_dir)
+            try:
+                from scripts.download_sbb_images import run as _download_sbb
+                import argparse as _ap
+                _dl_args = _ap.Namespace(
+                    ppn=ppn,
+                    output_dir=sbb_output_dir,
+                    max_pages=sbb_max_pages,
+                    workers=sbb_workers,
+                    verify_ssl=sbb_verify_ssl,
+                    show_metadata=False,
+                )
+                rc = _download_sbb(_dl_args)
+                if rc != 0:
+                    LOGGER.error("SBB download failed (exit code %d). Aborting.", rc)
+                    return 1
+            except Exception as exc:
+                LOGGER.error("SBB download raised an exception: %s: %s", type(exc).__name__, exc)
+                return 1
+        # Override input_dir with the downloaded folder
+        _input_dir_str = sbb_output_dir
+    else:
+        _input_dir_str = str(getattr(args, "input_dir", "") or "").strip()
+        if not _input_dir_str:
+            LOGGER.error("Either --ppn or --input-dir must be provided.")
+            return 1
+
+    input_dir = Path(_input_dir_str).expanduser().resolve()
     device_pref = str(getattr(args, "device", "auto") or "auto").strip().lower()
     max_len = int(getattr(args, "max_len", 0) or 0)
     line_preprocess = str(getattr(args, "line_preprocess", "gray") or "gray").strip().lower()
@@ -893,7 +1047,8 @@ def run(args: argparse.Namespace) -> int:
     bdrc_line_bbox_tolerance = float(getattr(args, "bdrc_line_bbox_tolerance", 3.0) or 3.0)
     bdrc_line_class_threshold = float(getattr(args, "bdrc_line_class_threshold", 0.0) or 0.0)
     bdrc_line_merge_lines = bool(getattr(args, "bdrc_line_merge_lines", True))
-    bdrc_line_use_tps = bool(getattr(args, "bdrc_line_use_tps", True))
+    bdrc_line_use_rotation = bool(getattr(args, "bdrc_line_use_rotation", False))
+    bdrc_line_use_tps = bool(getattr(args, "bdrc_line_use_tps", False))
     bdrc_line_tps_threshold = float(getattr(args, "bdrc_line_tps_threshold", 0.25) or 0.25)
 
     # Tesseract OCR-specific args
@@ -1058,6 +1213,28 @@ def run(args: argparse.Namespace) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     LOGGER.info("Output directory: %s", out_dir)
 
+    # --- Log resolved model configuration ---
+    LOGGER.info("=" * 60)
+    LOGGER.info("  batch-ocr configuration")
+    LOGGER.info("  engine        : %s", engine)
+    LOGGER.info("  layout_engine : %s", layout_engine)
+    if layout_engine == "cv":
+        LOGGER.info("  layout_model  : %s", layout_model)
+    elif layout_engine == "yolo_line":
+        LOGGER.info("  line_model    : %s", line_model)
+    elif layout_engine == "bdrc_line":
+        LOGGER.info("  bdrc_line_model : %s", bdrc_line_model)
+    if engine == "donut":
+        LOGGER.info("  ocr_model     : %s", ocr_model)
+    elif engine == "bdrc_ocr":
+        LOGGER.info("  bdrc_ocr_model: %s", bdrc_ocr_model)
+    elif engine == "tesseract":
+        LOGGER.info("  tess_lang     : %s", tess_lang)
+    LOGGER.info("  device        : %s", device)
+    LOGGER.info("  input_dir     : %s", input_dir)
+    LOGGER.info("  output_dir    : %s", out_dir)
+    LOGGER.info("=" * 60)
+
     # --- Load OCR runtime ---
     tess_lang_used = tess_lang
     if engine == "tesseract":
@@ -1112,7 +1289,7 @@ def run(args: argparse.Namespace) -> int:
 
     # --- Write repro.yaml ---
     cli_argv_repro = [
-        "--engine", engine,
+        "--ocr-engine", engine,
         "--layout-engine", layout_engine,
         "--input-dir", str(input_dir),
         "--device", device,
@@ -1130,6 +1307,7 @@ def run(args: argparse.Namespace) -> int:
             "--bdrc-line-tps-threshold", str(bdrc_line_tps_threshold),
         ]
         cli_argv_repro += ["--bdrc-line-merge-lines"] if bdrc_line_merge_lines else ["--bdrc-line-no-merge-lines"]
+        cli_argv_repro += ["--bdrc-line-use-rotation"] if bdrc_line_use_rotation else ["--bdrc-line-no-use-rotation"]
         cli_argv_repro += ["--bdrc-line-use-tps"] if bdrc_line_use_tps else ["--bdrc-line-no-use-tps"]
     if engine == "tesseract":
         cli_argv_repro += [
@@ -1178,14 +1356,18 @@ def run(args: argparse.Namespace) -> int:
     )
     LOGGER.info("repro.yaml written to %s", out_dir / "repro.yaml")
 
+    save_overlay = bool(getattr(args, "save_overlay", True))
+
     # --- Process each image ---
     total_lines = 0
     errors = 0
     for i, img_path in enumerate(image_files, start=1):
         LOGGER.info("[%d/%d] Processing %s …", i, len(image_files), img_path.name)
         n_lines = 0
+        img_np_result: Any = None
+        line_records_result: List[Dict[str, Any]] = []
         try:
-            transcript, n_lines = _ocr_image(
+            transcript, n_lines, img_np_result, line_records_result = _ocr_image(
                 img_path,
                 engine=engine,
                 runtime=runtime,
@@ -1201,6 +1383,7 @@ def run(args: argparse.Namespace) -> int:
                 bdrc_line_bbox_tolerance=bdrc_line_bbox_tolerance,
                 bdrc_line_class_threshold=bdrc_line_class_threshold,
                 bdrc_line_merge_lines=bdrc_line_merge_lines,
+                bdrc_line_use_rotation=bdrc_line_use_rotation,
                 bdrc_line_use_tps=bdrc_line_use_tps,
                 bdrc_line_tps_threshold=bdrc_line_tps_threshold,
             )
@@ -1213,6 +1396,16 @@ def run(args: argparse.Namespace) -> int:
         out_txt = out_dir / (img_path.stem + ".txt")
         out_txt.write_text(transcript, encoding="utf-8")
         LOGGER.info("  → %s (%d line(s))", out_txt.name, n_lines)
+
+        # --- Save line-box overlay image ---
+        if save_overlay and img_np_result is not None:
+            try:
+                overlay_pil = _render_line_box_overlay(img_np_result, line_records_result)
+                out_overlay = out_dir / (img_path.stem + "_overlay.jpg")
+                overlay_pil.save(str(out_overlay), format="JPEG", quality=92)
+                LOGGER.info("  → %s (overlay)", out_overlay.name)
+            except Exception as exc:
+                LOGGER.warning("  Could not save overlay for %s: %s", img_path.name, exc)
 
     LOGGER.info(
         "Done. %d image(s) processed, %d total line(s), %d error(s). Output: %s",
@@ -1233,7 +1426,11 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
         prog="batch-ocr",
         description=(
             "Batch OCR a folder of Pecha images using a layout model + OCR engine.\n\n"
-            "OCR engines (--engine):\n"
+            "SBB / Stabi one-command workflow:\n"
+            "  Pass --ppn <PPN> to download images from the Staatsbibliothek zu Berlin\n"
+            "  automatically before OCR. --input-dir is then optional.\n"
+            "  Example: python cli.py batch-ocr --ppn 337138764X --layout-engine bdrc_line --ocr-engine bdrc_ocr\n\n"
+            "OCR engines (--ocr-engine):\n"
             "  donut      (default) DONUT VisionEncoderDecoder model. Preprocessing pipeline\n"
             "             is auto-detected from the repro bundle (repro/image_preprocess.json).\n"
             "  bdrc_ocr   BDRC-style ONNX OCR model with BDRC line normalization.\n"
@@ -1245,14 +1442,16 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
             "  bdrc_line  BDRC ONNX line/layout model with BDRC contour postprocessing.\n"
             "             Auto-downloads the default BDRC line model when --bdrc-line-model is omitted.\n"
             "  tesseract  Tesseract page segmentation (PSM 3). No --layout-model needed.\n"
-            "             Combine with --engine donut or --engine bdrc_ocr to use\n"
+            "             Combine with --ocr-engine donut or --ocr-engine bdrc_ocr to use\n"
             "             Tesseract layout + OCR.\n\n"
             "Output is written to a subfolder of the input directory's parent:\n"
             "  DONUT+YOLO:      <input_dir_name>__<checkpoint_name>/\n"
             "  BDRC+BDRCLine:   <input_dir_name>__bdrc_ocr_<model_name>__bdrc_line/\n"
             "  DONUT+TessLayout:<input_dir_name>__<checkpoint_name>__tess_layout/\n"
             "  Tesseract:       <input_dir_name>__tesseract_<lang>/\n\n"
-            "Each image produces a .txt file (one line per detected text line).\n"
+            "Each image produces a .txt file (one line per detected text line) and\n"
+            "an *_overlay.jpg with the detected line boxes drawn on the source image\n"
+            "(pass --no-save-overlay to skip the overlay images).\n"
             "A repro.yaml documents the full run config and CLI command."
         ),
         add_help=add_help,
@@ -1260,11 +1459,15 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
 
     # --- Engine selection ---
     parser.add_argument(
-        "--engine",
+        "--ocr-engine",
+        "--ocr_engine",
+        "--engine",       # backward-compat alias
+        "--engine_",      # internal alias (argparse dest collision workaround)
+        dest="ocr_engine",
         type=str,
         default="donut",
         choices=["donut", "bdrc_ocr", "tesseract"],
-        help="OCR engine to use. 'donut' (default), 'bdrc_ocr' or 'tesseract'.",
+        help="OCR engine to use. 'donut' (default), 'bdrc_ocr' or 'tesseract'. Alias: --engine.",
     )
     parser.add_argument(
         "--layout-engine",
@@ -1281,7 +1484,7 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
             "'bdrc_line' uses a BDRC line/layout ONNX model specified by --bdrc-line-model. "
             "'tesseract' uses pytesseract page segmentation (PSM 3) — "
             "no --layout-model needed. "
-            "Combining --layout-engine tesseract with --engine donut lets you use "
+            "Combining --layout-engine tesseract with --ocr-engine donut lets you use "
             "Tesseract's page segmentation to crop lines and then run DONUT on each crop."
         ),
     )
@@ -1355,7 +1558,9 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
         default=0.0,
         help=(
             "Optional explicit class threshold for BDRC line/layout ONNX inference. "
-            "0.0 means use backend defaults."
+            "0.0 (default) means use the library default (0.9 for line models, 0.8 for layout models), "
+            "matching the OCR Workbench UI behaviour. "
+            "Set to a value > 0.0 to override explicitly."
         ),
     )
     parser.add_argument(
@@ -1374,19 +1579,40 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
         help="Disable contour grouping for BDRC line detection.",
     )
     parser.add_argument(
+        "--bdrc-line-use-rotation",
+        "--bdrc_line_use_rotation",
+        dest="bdrc_line_use_rotation",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable BDRC page rotation correction before line extraction. "
+            "Default: disabled (matches OCR Workbench UI default)."
+        ),
+    )
+    parser.add_argument(
+        "--bdrc-line-no-use-rotation",
+        "--bdrc_line_no_use_rotation",
+        dest="bdrc_line_use_rotation",
+        action="store_false",
+        help="Disable BDRC page rotation correction (default).",
+    )
+    parser.add_argument(
         "--bdrc-line-use-tps",
         "--bdrc_line_use_tps",
         dest="bdrc_line_use_tps",
         action="store_true",
-        default=True,
-        help="Enable BDRC global TPS dewarping before final line extraction. Default: enabled.",
+        default=False,
+        help=(
+            "Enable BDRC global TPS dewarping before final line extraction. "
+            "Default: disabled (matches OCR Workbench UI default)."
+        ),
     )
     parser.add_argument(
         "--bdrc-line-no-use-tps",
         "--bdrc_line_no_use_tps",
         dest="bdrc_line_use_tps",
         action="store_false",
-        help="Disable BDRC global TPS dewarping.",
+        help="Disable BDRC global TPS dewarping (default).",
     )
     parser.add_argument(
         "--bdrc-line-tps-threshold",
@@ -1397,15 +1623,106 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
         help="Minimum curved-line ratio required before BDRC TPS dewarping is applied. Default: 0.25.",
     )
     parser.add_argument(
+        "--save-overlay",
+        "--save_overlay",
+        dest="save_overlay",
+        action="store_true",
+        default=True,
+        help=(
+            "Save a JPEG overlay image (*_overlay.jpg) next to each .txt file, "
+            "with the detected line bounding boxes drawn on the source image. "
+            "Enabled by default."
+        ),
+    )
+    parser.add_argument(
+        "--no-save-overlay",
+        "--no_save_overlay",
+        dest="save_overlay",
+        action="store_false",
+        help="Skip saving the line-box overlay images.",
+    )
+    parser.add_argument(
         "--input-dir",
         "--input_dir",
         dest="input_dir",
         type=str,
-        required=True,
+        default="",
         help=(
             "Directory containing Pecha images to OCR. "
             "Supported formats: jpg, jpeg, png, tif, tiff, bmp, webp. "
-            "Files are processed in sorted order."
+            "Files are processed in sorted order. "
+            "Required unless --ppn is given (in which case images are downloaded first)."
+        ),
+    )
+
+    # --- SBB download options ---
+    sbb_group = parser.add_argument_group(
+        "SBB / Stabi download options",
+        description=(
+            "When --ppn is provided, images are downloaded from the Staatsbibliothek zu Berlin "
+            "before OCR runs. --input-dir is then optional (defaults to sbb_images/<PPN>)."
+        ),
+    )
+    sbb_group.add_argument(
+        "--ppn",
+        type=str,
+        default="",
+        metavar="PPN",
+        help=(
+            "PPN (Pica Production Number) of an SBB document. "
+            "When set, all pages are downloaded from the SBB METS API before OCR. "
+            "Example: --ppn 337138764X. "
+            "Overrides --input-dir (the downloaded folder is used as input)."
+        ),
+    )
+    sbb_group.add_argument(
+        "--sbb-output-dir",
+        "--sbb_output_dir",
+        dest="sbb_output_dir",
+        type=str,
+        default="",
+        metavar="DIR",
+        help=(
+            "Directory to save downloaded SBB images. "
+            "Defaults to sbb_images/<PPN>. Only used when --ppn is set."
+        ),
+    )
+    sbb_group.add_argument(
+        "--sbb-max-pages",
+        "--sbb_max_pages",
+        dest="sbb_max_pages",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Maximum number of SBB pages to download (0 = all). Only used when --ppn is set.",
+    )
+    sbb_group.add_argument(
+        "--sbb-workers",
+        "--sbb_workers",
+        dest="sbb_workers",
+        type=int,
+        default=8,
+        metavar="N",
+        help="Number of parallel download threads for SBB images. Default: 8.",
+    )
+    sbb_group.add_argument(
+        "--sbb-no-verify-ssl",
+        "--sbb_no_verify_ssl",
+        dest="sbb_verify_ssl",
+        action="store_false",
+        default=True,
+        help="Disable SSL certificate verification for SBB downloads.",
+    )
+    sbb_group.add_argument(
+        "--sbb-force-download",
+        "--sbb_force_download",
+        dest="sbb_force_download",
+        action="store_true",
+        default=False,
+        help=(
+            "Force re-download of SBB images even if the output directory already contains "
+            "images and a metadata.json. By default, download is skipped when images are "
+            "already present."
         ),
     )
     parser.add_argument(
@@ -1428,7 +1745,7 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
         type=str,
         default="",
         help=(
-            "Path to the DONUT OCR checkpoint directory (required for --engine donut). "
+            "Path to the DONUT OCR checkpoint directory (required for --ocr-engine donut). "
             "Must contain config.json and model weights. "
             "If a repro/ subdirectory is present, the preprocessing pipeline and "
             "tokenizer/image_processor are loaded from it automatically."
@@ -1456,7 +1773,7 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
         default="",
         help=(
             "Path to a BDRC OCR model directory (or model_config.json/onnx file). "
-            "Optional when --engine bdrc_ocr. If omitted, the default BDRC OCR bundle "
+            "Optional when --ocr-engine bdrc_ocr. If omitted, the default BDRC OCR bundle "
             "is downloaded into models/bdrc automatically."
         ),
     )
@@ -1476,7 +1793,7 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
     # --- Tesseract OCR engine options ---
     tess_group = parser.add_argument_group(
         "Tesseract OCR engine options",
-        "Used when --engine tesseract (OCR) or --layout-engine tesseract (layout detection).",
+        "Used when --ocr-engine tesseract (OCR) or --layout-engine tesseract (layout detection).",
     )
     tess_group.add_argument(
         "--tess-lang",
@@ -1485,7 +1802,7 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
         type=str,
         default="bod",
         help=(
-            "Tesseract language code for OCR (--engine tesseract). "
+            "Tesseract language code for OCR (--ocr-engine tesseract). "
             "Default: 'bod' (Tibetan). Falls back to 'eng' if 'bod' is not installed."
         ),
     )

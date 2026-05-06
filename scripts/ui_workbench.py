@@ -33,6 +33,11 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS_DIR = ROOT / "scripts"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import gradio as gr
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -132,7 +137,6 @@ except Exception:
     _ensure_default_bdrc_ocr_models = None
 
 
-ROOT = Path(__file__).resolve().parent
 _DEFAULT_BDRC_LINE_MERGE_LINES = True
 _DEFAULT_UI_BDRC_LINE_USE_ROTATION = False
 _DEFAULT_UI_BDRC_LINE_USE_TPS = False
@@ -142,13 +146,13 @@ DEFAULT_TEXTURE_PROMPT = (
 )
 
 CLI_SCRIPTS = [
-    "generate_training_data.py",
-    "train_model.py",
-    "inference_sbb.py",
-    "ocr_on_detections.py",
-    "pseudo_label_from_vlm.py",
-    "layout_rule_filter.py",
-    "run_pseudo_label_workflow.py",
+    "scripts/generate_training_data.py",
+    "scripts/train_model.py",
+    "scripts/inference_sbb.py",
+    "scripts/ocr_on_detections.py",
+    "scripts/pseudo_label_from_vlm.py",
+    "scripts/layout_rule_filter.py",
+    "scripts/run_pseudo_label_workflow.py",
     "scripts/train_image_encoder.py",
     "scripts/train_text_encoder.py",
     "scripts/train_text_hierarchy_vit.py",
@@ -1061,7 +1065,7 @@ def _summarize_ultralytics_training_mode(dataset: str, model: str, project: str)
     )
     lines = [
         f"Inferred task: {task}",
-        "Entrypoint: train_model.py",
+        "Entrypoint: scripts/train_model.py",
         f"Effective model: {model or '(empty)'}",
         f"Project: {project or default_project}",
         f"Suggested default project: {default_project}",
@@ -1134,7 +1138,7 @@ def run_generate_synthetic(
 ):
     cmd = [
         sys.executable,
-        "generate_training_data.py",
+        str(SCRIPTS_DIR / "generate_training_data.py"),
         "--background_train",
         background_train,
         "--background_val",
@@ -1232,7 +1236,7 @@ def run_generate_synthetic_live(
 ):
     cmd = [
         sys.executable,
-        "generate_training_data.py",
+        str(SCRIPTS_DIR / "generate_training_data.py"),
         "--background_train",
         background_train,
         "--background_val",
@@ -7035,7 +7039,7 @@ def run_ultralytics_train(
 ):
     cmd = [
         sys.executable,
-        "train_model.py",
+        str(SCRIPTS_DIR / "train_model.py"),
         "--dataset",
         dataset,
         "--model",
@@ -7124,7 +7128,7 @@ def _build_ultralytics_train_cmd(
     cmd = [
         sys.executable,
         "-u",
-        "train_model.py",
+        str(SCRIPTS_DIR / "train_model.py"),
         "--dataset",
         dataset,
         "--model",
@@ -11473,7 +11477,7 @@ def build_ui() -> gr.Blocks:
 
         # 2) Data generation
         with gr.Tab("2. Synthetic Data"):
-            gr.Markdown("Generate synthetic multi-class YOLO data using `generate_training_data.py`.")
+            gr.Markdown("Generate synthetic multi-class YOLO data using `scripts/generate_training_data.py`.")
             with gr.Row():
                 with gr.Column():
                     background_train = gr.Textbox(label="background_train", value="./data/tibetan numbers/backgrounds/")

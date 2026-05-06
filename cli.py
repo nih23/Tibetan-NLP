@@ -25,6 +25,10 @@ from pechabridge.cli.mine_mnn_pairs import create_parser as create_mnn_pairs_par
 from pechabridge.cli.weak_ocr_label import create_parser as create_weak_ocr_label_parser, run as run_weak_ocr_label
 from pechabridge.eval.eval_faiss_crosspage import create_parser as create_eval_faiss_crosspage_parser
 from pechabridge.eval.eval_faiss_crosspage import run as run_eval_faiss_crosspage
+from pechabridge.semantic_search_workbench.cli import (
+    create_parser as create_semantic_search_workbench_parser,
+)
+from pechabridge.semantic_search_workbench.cli import run as run_semantic_search_workbench
 from scripts.download_merge_openpecha_ocr_lines import (
     create_parser as create_download_openpecha_ocr_lines_parser,
 )
@@ -44,7 +48,16 @@ from scripts.download_pechabridge_models import (
     create_parser as create_download_pechabridge_models_parser,
     main as _download_pechabridge_models_main,
 )
+from scripts.download_sbb_images import (
+    create_parser as create_download_sbb_images_parser,
+    run as _run_download_sbb_images,
+)
 from scripts.eval_ocr_tokenizer import create_parser as create_eval_ocr_tokenizer_parser
+from scripts.extract_donut_ocr_errors import create_parser as create_extract_donut_ocr_errors_parser
+from scripts.ocr_error_review_workbench import create_parser as create_ocr_error_review_workbench_parser
+from scripts.summarize_donut_ocr_extraction_metrics import (
+    create_parser as create_summarize_donut_ocr_extraction_metrics_parser,
+)
 from scripts.train_line_segmentation import create_parser as create_train_line_segmentation_parser
 from scripts.warm_line_clip_workbench_cache import (
     create_parser as create_warm_line_clip_workbench_cache_parser,
@@ -159,6 +172,36 @@ def _build_root_parser() -> argparse.ArgumentParser:
     )
     train_donut_parser.set_defaults(handler=_run_train_donut_ocr)
 
+    extract_donut_errors_parent = create_extract_donut_ocr_errors_parser(add_help=False)
+    extract_donut_errors_parser = subparsers.add_parser(
+        "extract-donut-ocr-errors",
+        aliases=["extract-donut-errors", "extract-ocr-errors"],
+        parents=[extract_donut_errors_parent],
+        help="Extract high-CER OCR samples from a Donut/TrOCR checkpoint into JSONL or a fine-tune dataset",
+        description=extract_donut_errors_parent.description,
+    )
+    extract_donut_errors_parser.set_defaults(handler=_run_extract_donut_ocr_errors)
+
+    ocr_error_workbench_parent = create_ocr_error_review_workbench_parser(add_help=False)
+    ocr_error_workbench_parser = subparsers.add_parser(
+        "donut-ocr-error-workbench",
+        aliases=["ocr-error-workbench", "review-donut-ocr-errors"],
+        parents=[ocr_error_workbench_parent],
+        help="Launch a live Gradio workbench for reviewing extracted Donut OCR high-CER samples",
+        description=ocr_error_workbench_parent.description,
+    )
+    ocr_error_workbench_parser.set_defaults(handler=_run_ocr_error_review_workbench)
+
+    summarize_donut_extractions_parent = create_summarize_donut_ocr_extraction_metrics_parser(add_help=False)
+    summarize_donut_extractions_parser = subparsers.add_parser(
+        "summarize-donut-ocr-extractions",
+        aliases=["summarize-donut-errors", "summarize-ocr-extractions"],
+        parents=[summarize_donut_extractions_parent],
+        help="Summarize Donut OCR extraction CER metrics by checkpoint and source dataset",
+        description=summarize_donut_extractions_parent.description,
+    )
+    summarize_donut_extractions_parser.set_defaults(handler=_run_summarize_donut_ocr_extraction_metrics)
+
     workflow_parent = create_run_donut_ocr_workflow_parser(add_help=False)
     workflow_parser = subparsers.add_parser(
         "run-donut-ocr-workflow",
@@ -268,10 +311,23 @@ def _build_root_parser() -> argparse.ArgumentParser:
         "download-models",
         aliases=["download-pechabridge-models"],
         parents=[download_pb_parent],
-        help="Download PechaBridge OCR + Line Segmentation models from HuggingFace into models/",
+        help=(
+            "Download PechaBridge models from HuggingFace into models/. "
+            "Includes OCR, Line Segmentation, and Dual Encoder (--models ocr,line,encoder or 'all')."
+        ),
         description=download_pb_parent.description,
     )
     download_pb_parser.set_defaults(handler=_run_download_pechabridge_models)
+
+    download_sbb_parent = create_download_sbb_images_parser(add_help=False)
+    download_sbb_parser = subparsers.add_parser(
+        "download-sbb-images",
+        aliases=["download-stabi-images", "download-sbb"],
+        parents=[download_sbb_parent],
+        help="Download page images from the Staatsbibliothek zu Berlin (SBB / Stabi) by PPN",
+        description=download_sbb_parent.description,
+    )
+    download_sbb_parser.set_defaults(handler=_run_download_sbb_images_cmd)
 
     bosentencepiece_parent = create_download_bosentencepiece_tokenizer_parser(add_help=False)
     bosentencepiece_parser = subparsers.add_parser(
@@ -310,6 +366,42 @@ def _build_root_parser() -> argparse.ArgumentParser:
     )
     weak_ocr_parser.set_defaults(handler=_run_weak_ocr_label)
 
+    semantic_search_parent = create_semantic_search_workbench_parser(add_help=False)
+    semantic_search_parser = subparsers.add_parser(
+        "semantic-search-workbench",
+        parents=[semantic_search_parent],
+        help="Launch the Gradio-based Semantic Search Workbench for Tibetan transcripts",
+        description=semantic_search_parent.description,
+    )
+    semantic_search_parser.set_defaults(handler=_run_semantic_search_workbench)
+
+    ocr_workbench_parser = subparsers.add_parser(
+        "ocr-workbench",
+        aliases=["ui-ocr-workbench"],
+        help="Launch the dedicated OCR Workbench UI",
+        description="Launch the Gradio OCR Workbench for interactive Tibetan OCR on pecha page images.",
+    )
+    _add_workbench_launch_args(ocr_workbench_parser, default_host="0.0.0.0", default_port=7865)
+    ocr_workbench_parser.set_defaults(handler=_run_ocr_workbench)
+
+    layout_workbench_parser = subparsers.add_parser(
+        "layout-workbench",
+        aliases=["ui-workbench"],
+        help="Launch the full PechaBridge layout/training Workbench UI",
+        description="Launch the full Gradio Workbench for dataset generation, layout training, OCR utilities, and audits.",
+    )
+    _add_workbench_launch_args(layout_workbench_parser, default_host="127.0.0.1", default_port=7860)
+    layout_workbench_parser.set_defaults(handler=_run_layout_workbench)
+
+    transformer_layout_parser = subparsers.add_parser(
+        "transformer-layout-workbench",
+        aliases=["transformer-layout-ui"],
+        help="Launch the transformer layout/OCR parser Workbench UI",
+        description="Launch the Gradio UI for transformer-based layout and OCR parser experiments.",
+    )
+    _add_workbench_launch_args(transformer_layout_parser, default_host="127.0.0.1", default_port=7866)
+    transformer_layout_parser.set_defaults(handler=_run_transformer_layout_workbench)
+
     mnn_parent = create_mnn_pairs_parser(add_help=False)
     mnn_parser = subparsers.add_parser(
         "mine-mnn-pairs",
@@ -347,6 +439,12 @@ def _build_root_parser() -> argparse.ArgumentParser:
     probe_line_clip_parser.set_defaults(handler=_run_probe_line_clip_workbench_random_samples)
 
     return parser
+
+
+def _add_workbench_launch_args(parser: argparse.ArgumentParser, *, default_host: str, default_port: int) -> None:
+    parser.add_argument("--host", type=str, default=default_host, help=f"Server host (default: {default_host})")
+    parser.add_argument("--port", type=int, default=default_port, help=f"Server port (default: {default_port})")
+    parser.add_argument("--share", action="store_true", help="Enable Gradio public share link")
 
 
 def _run_prepare_texture_lora_dataset(args: argparse.Namespace) -> int:
@@ -426,6 +524,26 @@ def _run_train_donut_ocr(args: argparse.Namespace) -> int:
     return 0
 
 
+def _run_extract_donut_ocr_errors(args: argparse.Namespace) -> int:
+    from scripts.extract_donut_ocr_errors import run
+
+    run(args)
+    return 0
+
+
+def _run_ocr_error_review_workbench(args: argparse.Namespace) -> int:
+    from scripts.ocr_error_review_workbench import run
+
+    return int(run(args))
+
+
+def _run_summarize_donut_ocr_extraction_metrics(args: argparse.Namespace) -> int:
+    from scripts.summarize_donut_ocr_extraction_metrics import run
+
+    run(args)
+    return 0
+
+
 def _run_donut_ocr_workflow(args: argparse.Namespace) -> int:
     from scripts.run_donut_ocr_workflow import run
 
@@ -496,6 +614,10 @@ def _run_download_bosentencepiece_tokenizer(args: argparse.Namespace) -> int:
     return int(run(args))
 
 
+def _run_download_sbb_images_cmd(args: argparse.Namespace) -> int:
+    return int(_run_download_sbb_images(args))
+
+
 def _run_batch_ocr(args: argparse.Namespace) -> int:
     return int(run_batch_ocr(args))
 
@@ -507,6 +629,34 @@ def _run_gen_patches(args: argparse.Namespace) -> int:
 
 def _run_weak_ocr_label(args: argparse.Namespace) -> int:
     run_weak_ocr_label(args)
+    return 0
+
+
+def _run_semantic_search_workbench(args: argparse.Namespace) -> int:
+    return int(run_semantic_search_workbench(args))
+
+
+def _run_ocr_workbench(args: argparse.Namespace) -> int:
+    from scripts.ui_ocr_workbench import build_ui
+
+    app = build_ui()
+    app.launch(server_name=args.host, server_port=int(args.port), share=bool(args.share))
+    return 0
+
+
+def _run_layout_workbench(args: argparse.Namespace) -> int:
+    from scripts.ui_workbench import build_ui
+
+    app = build_ui()
+    app.launch(server_name=args.host, server_port=int(args.port), share=bool(args.share))
+    return 0
+
+
+def _run_transformer_layout_workbench(args: argparse.Namespace) -> int:
+    from scripts.ui_transformer_layout import build_demo
+
+    app = build_demo()
+    app.launch(server_name=args.host, server_port=int(args.port), share=bool(args.share))
     return 0
 
 

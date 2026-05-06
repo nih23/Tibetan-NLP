@@ -13,8 +13,14 @@ Features:
 from __future__ import annotations
 
 import json
+import sys
 from functools import lru_cache
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import gradio as gr
 import numpy as np

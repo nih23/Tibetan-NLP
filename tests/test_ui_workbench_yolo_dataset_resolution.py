@@ -7,7 +7,7 @@ from PIL import Image
 
 
 gr = pytest.importorskip("gradio")
-ui_workbench = pytest.importorskip("ui_workbench")
+ui_workbench = pytest.importorskip("scripts.ui_workbench")
 
 
 def _make_segment_dataset(root: Path) -> Path:

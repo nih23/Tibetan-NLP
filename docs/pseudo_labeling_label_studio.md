@@ -5,12 +5,12 @@ This guide describes the streamlined workflow for layout pseudo-labeling with th
 - `1`: `tibetan_text` (center)
 - `2`: `chinese_number_word` (right)
 
-For regular day-to-day usage, prefer the Workbench-first flow: [README.md](README.md)
+For regular day-to-day usage, prefer the Workbench-first flow: [README.md](../README.md)
 
 ## Option A: Recommended (single command)
 
 ```bash
-python run_pseudo_label_workflow.py \
+python scripts/run_pseudo_label_workflow.py \
   --input-dir data/my_inference_data \
   --work-dir datasets/workflow \
   --split train \
@@ -24,7 +24,7 @@ python run_pseudo_label_workflow.py \
 Optionally launch Label Studio directly:
 
 ```bash
-python run_pseudo_label_workflow.py \
+python scripts/run_pseudo_label_workflow.py \
   --input-dir data/my_inference_data \
   --work-dir datasets/workflow \
   --split train \
@@ -37,8 +37,8 @@ python run_pseudo_label_workflow.py \
 ```
 
 The workflow executes:
-1. `pseudo_label_from_vlm.py`
-2. `layout_rule_filter.py`
+1. `scripts/pseudo_label_from_vlm.py`
+2. `scripts/layout_rule_filter.py`
 3. `label-studio-converter import yolo`
 4. optionally `label-studio`
 
@@ -47,7 +47,7 @@ The workflow executes:
 ### 1) Generate pseudo-labels from VLM output
 
 ```bash
-python pseudo_label_from_vlm.py \
+python scripts/pseudo_label_from_vlm.py \
   --input-dir data/my_inference_data \
   --output-dir datasets/pseudo-vlm \
   --split train \
@@ -63,7 +63,7 @@ Alternative parsers (depending on your local setup): `legacy`, `mineru25`, `qwen
 ### 2) Apply layout rules
 
 ```bash
-python layout_rule_filter.py \
+python scripts/layout_rule_filter.py \
   --input-split-dir datasets/pseudo-vlm/train \
   --output-split-dir datasets/pseudo-vlm-filtered/train \
   --allow-relabel \
@@ -97,5 +97,5 @@ label-studio
 
 ## Additional Documentation
 
-- Workbench-first usage: [README.md](README.md)
-- CLI reference: [README_CLI.md](README_CLI.md)
+- Workbench-first usage: [README.md](../README.md)
+- CLI reference: [cli.md](cli.md)

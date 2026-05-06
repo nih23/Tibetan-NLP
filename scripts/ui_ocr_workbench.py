@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 import gradio as gr
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from ui_workbench import (
+from scripts.ui_workbench import (
     _apply_donut_ui_preprocess,
     _compute_line_projection_state,
     _load_donut_ocr_runtime_cached,
@@ -68,7 +72,6 @@ except Exception:
     torch = None
 
 
-ROOT = Path(__file__).resolve().parent
 MODE_AUTO = "Fully Automatic OCR"
 MODE_MANUAL = "Manual Mode"
 LINE_SEG_CLASSICAL = "Classical CV"

@@ -1,17 +1,17 @@
 # PechaBridge CLI Reference
 
 This document contains the command-line workflow and script reference.
-If you are a regular user, prefer the UI in `README.md`.
+If you are a regular user, prefer the Workbench commands documented in `../README.md`.
 
 ## Main Scripts
 
-- `generate_training_data.py`
-- `train_model.py`
-- `inference_sbb.py`
-- `ocr_on_detections.py`
-- `pseudo_label_from_vlm.py`
-- `layout_rule_filter.py`
-- `run_pseudo_label_workflow.py`
+- `scripts/generate_training_data.py`
+- `scripts/train_model.py`
+- `scripts/inference_sbb.py`
+- `scripts/ocr_on_detections.py`
+- `scripts/pseudo_label_from_vlm.py`
+- `scripts/layout_rule_filter.py`
+- `scripts/run_pseudo_label_workflow.py`
 - `scripts/download_openpecha_line_segmentation.py`
 - `scripts/train_line_segmentation.py`
 - `cli.py` (unified diffusion + retrieval-encoder commands)
@@ -23,7 +23,7 @@ pip install -r requirements.txt
 ```
 
 `requirements.txt` is the unified dependency file for CLI, UI, VLM, diffusion/LoRA, and retrieval encoder training.
-Legacy files `requirements-ui.txt`, `requirements-vlm.txt`, and `requirements-lora.txt` remain as compatibility wrappers.
+Optional compatibility wrappers live in `../requirements/`.
 
 ## Unified CLI (`cli.py`)
 
@@ -43,6 +43,9 @@ Available subcommands:
 - `export-text-hierarchy`
 - `gen-patches`
 - `weak-ocr-label`
+- `ocr-workbench`
+- `layout-workbench`
+- `transformer-layout-workbench`
 - `mine-mnn-pairs`
 - `train-text-hierarchy-vit`
 - `eval-text-hierarchy-vit`
@@ -52,16 +55,76 @@ Available subcommands:
 - `eval-ocr-tokenizer`
 - `train-donut-ocr`
 - `run-donut-ocr-workflow`
+- `semantic-search-workbench`
 - `download-openpecha-ocr-lines`
 - `download-openpecha-line-segmentation`
 - `train-line-segmentation`
+
+## Semantic Search Workbench
+
+Launch the transcript retrieval UI through the unified CLI:
+
+```bash
+python cli.py semantic-search-workbench \
+  --config pechabridge/semantic_search_workbench/semantic-search-config.yaml
+```
+
+Useful flags:
+
+- `--reindex` rebuilds the local Qdrant collection before the Gradio app starts
+- `--reindex-only` rebuilds the collection and exits without launching the UI
+- `--api-only` starts only the FastAPI microservice
+- `--no-api` disables the FastAPI microservice for this run even if `api.enabled` is true in the config
+
+The workbench expects:
+
+- transcript files grouped by pecha folder
+- one text file per page
+- a `metadata.json` file in each pecha folder
+- OpenAI credentials in `pechabridge/semantic_search_workbench/.env`
+
+For the standard transcript filename layout `PPN337138764X-00000001.txt`, the trailing numeric block is treated as the page number.
+The bundled example config uses `page_number_pattern: ".*-([0-9]+)$"` for this.
+
+The bundled example config lives at:
+
+```text
+pechabridge/semantic_search_workbench/semantic-search-config.yaml
+```
+
+Retrieval flow:
+
+```text
+DE / EN query -> OpenAI translation -> custom embeddings -> Qdrant similarity search
+Tibetan query -> direct embedding -> Qdrant similarity search
+Wylie / EWTS query -> pyewts conversion -> custom embeddings -> Qdrant similarity search
+Qdrant hit -> context window reconstruction -> metadata.json lookup -> page-scan resolution -> optional back-translation
+```
+
+UI workflow:
+
+- choose the query mode explicitly: `DE / EN`, `Tibetan`, or `Wylie (EWTS)`
+- inspect ranked hit cards with matched lines, context windows, source links, and page scans
+- use the Research Workspace to filter by pecha, focus one hit with its scan, pin up to five hits for comparison, and export selected evidence as Markdown or JSON
+
+FastAPI microservice:
+
+- enabled via the `api` section in `semantic-search-config.yaml`
+- exposes `GET /health`, `GET /config`, `GET /index`, `POST /index/rebuild`, and `POST /search`
+- can run alongside Gradio or by itself with `--api-only`
+
+Metadata strategy:
+
+- Qdrant stores lightweight per-line references such as `pecha_title`, `pecha_path`, `metadata_file`, `page_number`, and `source_file`
+- the full `metadata.json` is loaded lazily from disk when a hit is rendered
+- this keeps the vector payloads smaller while still allowing page-image lookup via `pages[].source_url`
 
 ## Example CLI Workflow
 
 ### 1) Generate synthetic dataset
 
 ```bash
-python generate_training_data.py \
+python scripts/generate_training_data.py \
   --train_samples 100 \
   --val_samples 100 \
   --font_path_tibetan ext/Microsoft\ Himalaya.ttf \
@@ -72,7 +135,7 @@ python generate_training_data.py \
 Optional: apply LoRA-based texture augmentation directly during data generation:
 
 ```bash
-python generate_training_data.py \
+python scripts/generate_training_data.py \
   --train_samples 100 \
   --val_samples 20 \
   --font_path_tibetan ext/Microsoft\ Himalaya.ttf \
@@ -86,13 +149,13 @@ python generate_training_data.py \
 ### 2) Train model
 
 ```bash
-python train_model.py --dataset tibetan-yolo --epochs 100 --export
+python scripts/train_model.py --dataset tibetan-yolo --epochs 100 --export
 ```
 
 ### 3) Inference on SBB
 
 ```bash
-python inference_sbb.py --ppn 337138764X --model runs/detect/train/weights/best.pt
+python scripts/inference_sbb.py --ppn 337138764X --model runs/detect/train/weights/best.pt
 ```
 
 ### 4) OCR / parser inference
@@ -100,31 +163,31 @@ python inference_sbb.py --ppn 337138764X --model runs/detect/train/weights/best.
 List available parsers:
 
 ```bash
-python ocr_on_detections.py --list-parsers
+python scripts/ocr_on_detections.py --list-parsers
 ```
 
 Legacy parser:
 
 ```bash
-python ocr_on_detections.py --source image.jpg --parser legacy --model runs/detect/train/weights/best.pt --lang bod
+python scripts/ocr_on_detections.py --source image.jpg --parser legacy --model runs/detect/train/weights/best.pt --lang bod
 ```
 
 MinerU2.5 parser:
 
 ```bash
-python ocr_on_detections.py --source image.jpg --parser mineru25 --mineru-command mineru
+python scripts/ocr_on_detections.py --source image.jpg --parser mineru25 --mineru-command mineru
 ```
 
 Transformer parser examples:
 
 ```bash
-python ocr_on_detections.py --source image.jpg --parser paddleocr_vl
-python ocr_on_detections.py --source image.jpg --parser qwen25vl
-python ocr_on_detections.py --source image.jpg --parser qwen3_vl
-python ocr_on_detections.py --source image.jpg --parser granite_docling
-python ocr_on_detections.py --source image.jpg --parser deepseek_ocr
-python ocr_on_detections.py --source image.jpg --parser florence2
-python ocr_on_detections.py --source image.jpg --parser groundingdino
+python scripts/ocr_on_detections.py --source image.jpg --parser paddleocr_vl
+python scripts/ocr_on_detections.py --source image.jpg --parser qwen25vl
+python scripts/ocr_on_detections.py --source image.jpg --parser qwen3_vl
+python scripts/ocr_on_detections.py --source image.jpg --parser granite_docling
+python scripts/ocr_on_detections.py --source image.jpg --parser deepseek_ocr
+python scripts/ocr_on_detections.py --source image.jpg --parser florence2
+python scripts/ocr_on_detections.py --source image.jpg --parser groundingdino
 ```
 
 ### 5) Donut-style OCR workflow (Label 1 only)
@@ -161,7 +224,7 @@ Manual step-by-step:
 
 ```bash
 # A) Synthetic data + OCR crops/targets (label 1 only for crops)
-python generate_training_data.py \
+python scripts/generate_training_data.py \
   --dataset_name tibetan-donut-ocr-label1 \
   --output_dir ./datasets \
   --font_path_tibetan "ext/Microsoft Himalaya.ttf" \
@@ -396,10 +459,10 @@ label-studio
 
 ## Additional Docs
 
-- Pseudo-labeling and Label Studio import details: [README_PSEUDO_LABELING_LABEL_STUDIO.md](README_PSEUDO_LABELING_LABEL_STUDIO.md)
-- Patch dataset generation: [docs/dataset_generation.md](docs/dataset_generation.md)
-- MNN mining (cross-page positives): [docs/mnn_mining.md](docs/mnn_mining.md)
-- Retrieval training (mp-InfoNCE + MNN/OCR): [docs/retrieval_mpnce_training.md](docs/retrieval_mpnce_training.md)
-- Weak OCR labeling: [docs/weak_ocr.md](docs/weak_ocr.md)
-- Diffusion + LoRA details: [docs/texture_augmentation.md](docs/texture_augmentation.md)
-- Retrieval roadmap: [docs/tibetan_ngram_retrieval_plan.md](docs/tibetan_ngram_retrieval_plan.md)
+- Pseudo-labeling and Label Studio import details: [pseudo_labeling_label_studio.md](pseudo_labeling_label_studio.md)
+- Patch dataset generation: [dataset_generation.md](dataset_generation.md)
+- MNN mining (cross-page positives): [mnn_mining.md](mnn_mining.md)
+- Retrieval training (mp-InfoNCE + MNN/OCR): [retrieval_mpnce_training.md](retrieval_mpnce_training.md)
+- Weak OCR labeling: [weak_ocr.md](weak_ocr.md)
+- Diffusion + LoRA details: [texture_augmentation.md](texture_augmentation.md)
+- Retrieval roadmap: [tibetan_ngram_retrieval_plan.md](tibetan_ngram_retrieval_plan.md)
