@@ -62,7 +62,7 @@ python cli.py train-texture-lora \
 Distributed/multi-GPU run (recommended when available):
 
 ```bash
-accelerate launch scripts/train_texture_lora_sdxl.py \
+accelerate launch cli.py train-texture-lora \
   --dataset_dir /path/to/texture_lora_dataset \
   --output_dir /path/to/texture_lora_output \
   --resolution 1024 \

@@ -1,10 +1,10 @@
-![PechaBridge Hero](assets/hero_pb.jpeg)
+![PechaBridge Hero](docs/assets/hero_pb.jpeg)
 
 # PechaBridge
 
 PechaBridge is a library for **Tibetan document understanding** with a focus on training OCR and Line Segmentation models for text retrieval in Tibetan script.
 
-The primary entrypoint for end-to-end usage is the **OCR Workbench** (`ui_ocr_workbench.py`).
+The primary entrypoint for end-to-end usage is the unified CLI (`cli.py`), especially `python cli.py ocr-workbench` and `python cli.py batch-ocr`.
 
 ## Example: SBB Pecha OCR
 
@@ -12,7 +12,7 @@ The figure below shows an example line segmentation result for a Tibetan pecha
 page from the Staatsbibliothek zu Berlin (SBB). Each detected line is passed
 through the OCR model to extract the Tibetan text.
 
-![Line segmentation on an SBB pecha page](assets/sbb_pecha_line_segmentation.png)
+![Line segmentation on an SBB pecha page](docs/assets/sbb_pecha_line_segmentation.png)
 
 Sample OCR output for the page shown above:
 
@@ -30,6 +30,7 @@ recognition errors. Accuracy improves with more training data.
 
 - **End-to-end Tibetan Pecha OCR pipeline**: Automatically segments lines on digitised Pecha pages (e.g. from the Staatsbibliothek zu Berlin) using a YOLO-based line segmentation model, then transcribes each line with a fine-tuned Donut VLM. A single `batch-ocr` CLI command covers download → line detection → OCR → transcript export.
 - **Synthetic multi-class dataset generation**: Creates YOLO-ready pages for Tibetan number words, Tibetan text blocks, and Chinese number words.
+- **Semantic Search Workbench for Tibetan transcripts**: Indexes line-level transcript data in local Qdrant, supports DE/EN, Tibetan Unicode, and Wylie/EWTS query modes, and returns ranked passages with configurable context windows in a Gradio UI plus optional FastAPI endpoints.
 
 ### Advanced Research Features
 - **Standalone DONUT/TroCR OCR training**: Trains OCR directly on OpenPecha/BDRC line manifests (`train-donut-ocr`) with `none|pb|gray|bdrc|rgb` image preprocessing and CER evaluation.
@@ -43,9 +44,8 @@ recognition errors. Accuracy improves with more training data.
 pip install -r requirements.txt
 ```
 
-`requirements.txt` is now the **unified** dependency file for the repository.
-
-Legacy files `requirements-ui.txt`, `requirements-vlm.txt`, and `requirements-lora.txt` remain as compatibility wrappers.
+`requirements.txt` is the **unified** dependency file for the repository.
+Optional compatibility wrappers live in `requirements/`.
 
 ## Pretrained Models
 
@@ -77,7 +77,7 @@ After download the directory layout is:
 ```
 models/
   ocr/
-    PechaBridgeOCR/          ← DONUT checkpoint (auto-detected by ui_ocr_workbench.py)
+    PechaBridgeOCR/          ← DONUT checkpoint (auto-detected by the OCR Workbench)
       config.json
       model.safetensors
       tokenizer_config.json
@@ -86,10 +86,10 @@ models/
         image_preprocess.json
         generate_config.json
   line_segmentation/
-    PechaBridgeLineSegmentation.pt   ← YOLO .pt (auto-detected by ui_workbench.py)
+    PechaBridgeLineSegmentation.pt   ← YOLO .pt (auto-detected by the Workbenches)
 ```
 
-Both UI workbenches (`ui_ocr_workbench.py`, `ui_workbench.py`) scan these directories on startup and populate their model dropdowns automatically — no manual path configuration needed.
+The UI workbenches scan these directories on startup and populate their model dropdowns automatically — no manual path configuration needed.
 
 ### Batch OCR with downloaded models
 
@@ -248,16 +248,16 @@ The output directory will contain:
 > Replace `337138764X` with any other SBB PPN to download a different work.
 > You can find PPNs in the [SBB catalogue](https://stabikat.de) or the
 > [SBB digital collections](https://digital.staatsbibliothek-berlin.de).
-> The UI workbench (`ui_workbench.py`) also has a built-in **PPN Downloader** tab.
+> The layout Workbench (`python cli.py layout-workbench`) also has a built-in **PPN Downloader** tab.
 
 ---
 
 ## OCR Workbench
 
-The **OCR Workbench** (`ui_ocr_workbench.py`) is a dedicated Gradio UI for interactive Tibetan OCR on pecha page images.
+The **OCR Workbench** is a dedicated Gradio UI for interactive Tibetan OCR on pecha page images.
 
 ```bash
-python ui_ocr_workbench.py
+python cli.py ocr-workbench
 ```
 
 ### Quick Start
@@ -308,20 +308,205 @@ Upload page image
 
 - The DONUT model and YOLO line segmentation model are loaded once and cached in memory for the session.
 - The preprocessing pipeline (`bdrc`, `gray`, `rgb`) is read automatically from `repro/image_preprocess.json` inside the checkpoint — no manual selection needed when using downloaded models.
-- For remote server usage, use SSH port forwarding and keep `UI_SHARE=false`.
+- For remote server usage, use SSH port forwarding and omit `--share`.
+
+## Semantic Search Workbench
+
+The **Semantic Search Workbench** is a Gradio-based retrieval UI for historical Tibetan transcripts.
+It is meant for cases where transcripts already exist as page-wise text files and should be searched semantically instead of by exact string match.
+
+Current retrieval flow:
+
+```text
+DE / EN query
+  -> translate into Classical Tibetan with OpenAI
+Tibetan Unicode query
+  -> use directly for retrieval
+Wylie / EWTS query
+  -> convert locally to Tibetan Unicode with pyewts
+all modes
+  -> embed the Tibetan query with a custom Hugging Face text encoder
+  -> search line embeddings in local Qdrant
+  -> reconstruct the context window around each hit
+  -> resolve the corresponding metadata.json for the hit's pecha
+  -> render the associated page scan from the metadata pages/source_url mapping
+  -> optionally back-translate the context into English
+  -> inspect ranked results, sources, and metadata in Gradio
+```
+
+### What The UI Shows
+
+- Explicit query input modes: `DE / EN`, `Tibetan`, and `Wylie (EWTS)`
+- The Tibetan query actually used for retrieval, whether translated or converted from Wylie
+- Ranked hits with source labels (`pecha | page | line | file`) and human-readable relevance labels
+- The matched line plus configurable context lines around it
+- The associated page scan for the matched transcript page, when `metadata.json` provides a `pages[].source_url`
+- Direct browser links to the source transcript, `metadata.json`, and full page image
+- Optional English back-translation of each context window
+- Local Qdrant collection status and a manual reindex action
+- Search controls for result count (`top_k`) and context-window radius
+- A Research Workspace for filtering hits by pecha, focusing one hit in a text/scan reading panel, pinning hits for comparison, and exporting selected evidence as Markdown or JSON
+- An optional FastAPI microservice layer for health checks, index status/rebuild, and JSON search responses
+
+### Current UX / Research Focus
+
+The current UI is deliberately retrieval-first rather than answer-first.
+It is optimized for philological inspection and traceability:
+
+- the Tibetan retrieval query is shown explicitly
+- each hit is rendered as a card with score, source, matched line, and context
+- the matching line is visually highlighted inside the context window
+- English back-translation and collection metadata are available as expandable details
+- the associated page image can be opened directly from the result card
+- the Phase 2 Research Workspace supports pecha-level filtering, focused close reading, pinned-hit comparison, and note-friendly exports
+
+### Modular UI And API Layout
+
+The workbench is split into smaller modules:
+
+- `ui.py` builds the Gradio layout and wires events
+- `ui_workspace.py` renders and exports the Research Workspace state
+- `api.py` exposes the same search/index service through FastAPI endpoints
+- `service.py` remains the application service for translation, Qdrant search, context reconstruction, and scan resolution
+
+When `api.enabled: true` is set in `semantic-search-config.yaml`, the CLI starts the FastAPI microservice alongside Gradio.
+The default example config exposes it on `127.0.0.1:7861`.
+
+Useful API endpoints:
+
+- `GET /health`
+- `GET /config`
+- `GET /index`
+- `POST /index/rebuild`
+- `POST /search`
+
+### Expected Transcript Layout
+
+The workbench expects transcript files grouped by pecha, with one text file per page and a `metadata.json` per pecha folder:
+
+```text
+transcripts/
+  pecha_1/
+    metadata.json
+    page_0001.txt
+    page_0002.txt
+  pecha_2/
+    metadata.json
+    page_0001.txt
+```
+
+Each page file is split on newline boundaries and indexed line-by-line. The page number is derived from the filename using the regex configured in `semantic-search-config.yaml`.
+For the standard SBB-style filename layout `PPN337138764X-00000001.txt`, this corresponds to page `1`, `PPN337138764X-00000005.txt` to page `5`, and so on.
+
+The `metadata.json` is expected to contain a `pages` list with entries such as:
+
+```json
+{
+  "index": 4,
+  "filename": "PPN337138764X-00000005_ca6508937e54_4.jpg",
+  "source_url": "https://content.staatsbibliothek-berlin.de/dc/PPN337138764X-00000005/full/max/0/default.jpg"
+}
+```
+
+This is what allows the workbench to render the correct source scan for a retrieval hit.
+
+### Configuration
+
+All runtime settings are externalized.
+
+- Example YAML config: `pechabridge/semantic_search_workbench/semantic-search-config.yaml`
+- Example env file: `pechabridge/semantic_search_workbench/.env.example`
+
+The YAML controls:
+
+- transcript root and file naming rules
+- Hugging Face model ID for the custom Tibetan CLIP-style text encoder
+- local Qdrant storage path, collection name, and distance metric
+- chunking and context-window parameters
+- OpenAI translation model settings
+- Gradio host and port settings
+- FastAPI microservice host, port, docs, and log-level settings
+
+The bundled example config uses the page-number regex:
+
+```yaml
+page_number_pattern: ".*-([0-9]+)$"
+```
+
+so that transcript filenames like `PPN337138764X-00000005.txt` map to page `5`.
+
+Sensitive values such as the OpenAI API key are loaded via `.env` using `python-dotenv`.
+
+### Quick Start
+
+1. Install dependencies:
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Create the environment file:
+
+   ```bash
+   cp pechabridge/semantic_search_workbench/.env.example \
+      pechabridge/semantic_search_workbench/.env
+   ```
+
+3. Edit the example config and point it to your transcript corpus plus Hugging Face model:
+
+   ```text
+   pechabridge/semantic_search_workbench/semantic-search-config.yaml
+   ```
+
+4. Launch the workbench from the unified CLI:
+
+   ```bash
+   python cli.py semantic-search-workbench \
+       --config pechabridge/semantic_search_workbench/semantic-search-config.yaml
+   ```
+
+Optional: force a full Qdrant rebuild before starting the UI:
+
+```bash
+python cli.py semantic-search-workbench \
+    --config pechabridge/semantic_search_workbench/semantic-search-config.yaml \
+    --reindex
+```
+
+Or rebuild the index only and exit:
+
+```bash
+python cli.py semantic-search-workbench \
+    --config pechabridge/semantic_search_workbench/semantic-search-config.yaml \
+    --reindex-only
+```
+
+Run only the FastAPI microservice:
+
+```bash
+python cli.py semantic-search-workbench \
+    --config pechabridge/semantic_search_workbench/semantic-search-config.yaml \
+    --api-only
+```
+
+### Notes
+
+- The workbench uses a local on-disk Qdrant instance, so the vector index persists between runs.
+- Search quality depends strongly on transcript cleanliness and on the configured Tibetan text encoder.
+- The current UI is retrieval-first: it focuses on translated queries, evidence windows, metadata inspection, and page-scan validation rather than answer generation.
+- To keep Qdrant payloads lightweight, the workbench stores references such as `pecha_path` and `metadata_file` per line and loads `metadata.json` lazily when a hit is rendered.
+- Older indices that embedded the full `metadata.json` still work as a fallback, but rebuilding the index is recommended after upgrading to the current metadata-reference layout.
 
 ## Running the Workbench
 
-Both `ui_ocr_workbench.py` and `ui_workbench.py` accept optional runtime flags via environment variables:
+The workbenches can be launched through the CLI with runtime flags:
 
 ```bash
-export UI_HOST=127.0.0.1   # use 0.0.0.0 for remote server binding
-export UI_PORT=7860
-export UI_SHARE=false      # set true only if you explicitly want a public Gradio link
-python ui_ocr_workbench.py  # or ui_workbench.py
+python cli.py ocr-workbench --host 127.0.0.1 --port 7865
+python cli.py layout-workbench --host 127.0.0.1 --port 7860
 ```
 
-For remote server usage, keep `UI_SHARE=false` and use SSH port forwarding:
+For remote server usage, omit `--share` and use SSH port forwarding:
 
 ```bash
 ssh -L 7860:127.0.0.1:7860 <user>@<server>
@@ -413,13 +598,17 @@ python cli.py probe-line-clip-workbench-random-samples \
   --samples-per-split 200 \
   --summary-only
 
+# Launch the Semantic Search Workbench
+python cli.py semantic-search-workbench \
+  --config pechabridge/semantic_search_workbench/semantic-search-config.yaml
+
 # Train Donut/TroCR OCR directly on line manifests (with CER on eval split)
 python cli.py train-donut-ocr \
   --train_manifest ./datasets/openpecha_ocr_lines/train/meta/lines.jsonl \
   --val_manifest ./datasets/openpecha_ocr_lines/eval/meta/lines.jsonl \
   --output_dir ./models/donut_openpecha_rgb \
   --model_name_or_path microsoft/trocr-base-stage1 \
-  --tokenizer_path openpecha/BoSentencePiece \
+  --tokenizer_path ./ext/BoSentencePiece \
   --image_preprocess_pipeline rgb
 
 # Cross-page FAISS evaluation from exported embeddings
@@ -437,6 +626,8 @@ python cli.py run-donut-ocr-workflow \
   --font_path_chinese ext/simkai.ttf \
   --model_output_dir ./models/donut-ocr-label1
 ```
+
+For the full OCR training workflow, including dataset download, tiny-run warmup, non-square letterboxed training, and checkpoint selection, see [docs/donut_training_guide.md](docs/donut_training_guide.md).
 
 ## Model Outputs And Workbench Compatibility
 
@@ -459,7 +650,7 @@ Each checkpoint also contains a `repro/` bundle with:
 Current Workbench support:
 
 - The Workbench supports the **DONUT OCR workflow runner** (`run-donut-ocr-workflow`) and monitors training logs/output dirs.
-- `ui_ocr_workbench.py` auto-scans `models/ocr/` for checkpoints and exposes them in the DONUT dropdown.
+- The OCR Workbench auto-scans `models/ocr/` for checkpoints and exposes them in the DONUT dropdown.
 - Training and evaluation are fully supported via CLI (`cli.py train-donut-ocr`).
 
 ### Dual Vision-Text Encoder (`train-text-hierarchy-vit --train-mode line_clip`)
@@ -493,14 +684,14 @@ Then use the Workbench export actions.
 
 ## Documentation Guide
 
-- **NEW:** Full DONUT OCR training playbook (Tiny-Pretraining, Anti-Collapse, Full-Run recipes): [docs/donut_training_guide.md](docs/donut_training_guide.md)
-- CLI command reference and end-to-end examples: [README_CLI.md](README_CLI.md)
-- Pseudo-labeling and Label Studio workflow: [README_PSEUDO_LABELING_LABEL_STUDIO.md](README_PSEUDO_LABELING_LABEL_STUDIO.md)
+- Full DONUT/TroCR OCR training guide (dataset download, tiny runs, preprocessing, letterboxing, full runs, checkpoint selection): [docs/donut_training_guide.md](docs/donut_training_guide.md)
+- CLI command reference and end-to-end examples: [docs/cli.md](docs/cli.md)
+- Pseudo-labeling and Label Studio workflow: [docs/pseudo_labeling_label_studio.md](docs/pseudo_labeling_label_studio.md)
 - Patch dataset generation (YOLO textbox -> lines -> sub-patches): [docs/dataset_generation.md](docs/dataset_generation.md)
 - Robust MNN mining for cross-page positives: [docs/mnn_mining.md](docs/mnn_mining.md)
 - Retrieval training with mp-InfoNCE (MNN/OCR weak positives): [docs/retrieval_mpnce_training.md](docs/retrieval_mpnce_training.md)
-- DONUT/TroCR OCR training (OpenPecha/BDRC manifests, CER, checkpoints): [README_DONUT_OCR.md](README_DONUT_OCR.md)
-- Line-CLIP dual vision-text encoder training (DINOv2 + text encoder): [README_LINE_CLIP_DUAL_ENCODER.md](README_LINE_CLIP_DUAL_ENCODER.md)
+- DONUT/TroCR OCR training (OpenPecha/BDRC manifests, CER, checkpoints): [docs/donut_ocr.md](docs/donut_ocr.md)
+- Line-CLIP dual vision-text encoder training (DINOv2 + text encoder): [docs/line_clip_dual_encoder.md](docs/line_clip_dual_encoder.md)
 - line_clip cache warmup + in-split/cross-split probing & evaluation guide: [docs/line_clip_dual_encoder_probe_guide.md](docs/line_clip_dual_encoder_probe_guide.md)
 - Weak OCR labeling for patch datasets: [docs/weak_ocr.md](docs/weak_ocr.md)
 - Diffusion + LoRA details: [docs/texture_augmentation.md](docs/texture_augmentation.md)

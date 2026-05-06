@@ -487,7 +487,7 @@ def _detect_lines_classical(
     device: str,
 ) -> List[Dict[str, Any]]:
     """Run YOLO-based layout detection and return sorted line records."""
-    from ui_workbench import run_tibetan_text_line_split_classical
+    from scripts.ui_workbench import run_tibetan_text_line_split_classical
 
     split_out = run_tibetan_text_line_split_classical(
         image=image_np,
