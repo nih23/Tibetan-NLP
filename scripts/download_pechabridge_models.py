@@ -2,8 +2,8 @@
 """Download PechaBridge OCR, Line Segmentation, and Dual Encoder models from HuggingFace Hub.
 
 Downloads models into the exact directory structure expected by:
-- ui_ocr_workbench.py  (auto-scans models/ocr/ and models/line_segmentation/)
-- ui_workbench.py      (scans models/line_segmentation/)
+- python cli.py ocr-workbench     (auto-scans models/ocr/ and models/line_segmentation/)
+- python cli.py layout-workbench  (scans models/line_segmentation/)
 - cli.py batch-ocr     (--ocr-model, --line-model)
 - Semantic Search Workbench (huggingface_model_id in YAML config)
 
@@ -365,7 +365,7 @@ def _print_usage_hint(results: dict) -> None:
         print(f"  # or the HF repo subfolder:")
         print(f"  #   {DUAL_ENCODER_HF_REPO}/text_encoder")
 
-    print(f"\n  # The UI workbenches (ui_ocr_workbench.py, ui_workbench.py)")
+    print(f"\n  # The UI workbenches (python cli.py ocr-workbench, python cli.py layout-workbench)")
     print(f"  # will auto-detect OCR and line segmentation models on startup.")
     print()
 

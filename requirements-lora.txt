@@ -1,3 +1,0 @@
-# Compatibility wrapper.
-# Use `requirements.txt` as the unified dependency file.
--r requirements.txt

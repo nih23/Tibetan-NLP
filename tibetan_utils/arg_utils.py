@@ -1127,7 +1127,7 @@ def add_train_donut_ocr_arguments(parser):
 def add_run_donut_ocr_workflow_arguments(parser):
     """Arguments for end-to-end synthetic generation + OCR prep + Donut training."""
     parser.add_argument('--dataset_name', type=str, default='tibetan-donut-ocr-label1',
-                       help='Dataset name used in generate_training_data.py')
+                       help='Dataset name used in scripts/generate_training_data.py')
     parser.add_argument('--dataset_output_dir', type=str, default='./datasets',
                        help='Base output directory for generated dataset')
     parser.add_argument('--train_samples', type=int, default=2000,

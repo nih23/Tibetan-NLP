@@ -375,6 +375,33 @@ def _build_root_parser() -> argparse.ArgumentParser:
     )
     semantic_search_parser.set_defaults(handler=_run_semantic_search_workbench)
 
+    ocr_workbench_parser = subparsers.add_parser(
+        "ocr-workbench",
+        aliases=["ui-ocr-workbench"],
+        help="Launch the dedicated OCR Workbench UI",
+        description="Launch the Gradio OCR Workbench for interactive Tibetan OCR on pecha page images.",
+    )
+    _add_workbench_launch_args(ocr_workbench_parser, default_host="0.0.0.0", default_port=7865)
+    ocr_workbench_parser.set_defaults(handler=_run_ocr_workbench)
+
+    layout_workbench_parser = subparsers.add_parser(
+        "layout-workbench",
+        aliases=["ui-workbench"],
+        help="Launch the full PechaBridge layout/training Workbench UI",
+        description="Launch the full Gradio Workbench for dataset generation, layout training, OCR utilities, and audits.",
+    )
+    _add_workbench_launch_args(layout_workbench_parser, default_host="127.0.0.1", default_port=7860)
+    layout_workbench_parser.set_defaults(handler=_run_layout_workbench)
+
+    transformer_layout_parser = subparsers.add_parser(
+        "transformer-layout-workbench",
+        aliases=["transformer-layout-ui"],
+        help="Launch the transformer layout/OCR parser Workbench UI",
+        description="Launch the Gradio UI for transformer-based layout and OCR parser experiments.",
+    )
+    _add_workbench_launch_args(transformer_layout_parser, default_host="127.0.0.1", default_port=7866)
+    transformer_layout_parser.set_defaults(handler=_run_transformer_layout_workbench)
+
     mnn_parent = create_mnn_pairs_parser(add_help=False)
     mnn_parser = subparsers.add_parser(
         "mine-mnn-pairs",
@@ -412,6 +439,12 @@ def _build_root_parser() -> argparse.ArgumentParser:
     probe_line_clip_parser.set_defaults(handler=_run_probe_line_clip_workbench_random_samples)
 
     return parser
+
+
+def _add_workbench_launch_args(parser: argparse.ArgumentParser, *, default_host: str, default_port: int) -> None:
+    parser.add_argument("--host", type=str, default=default_host, help=f"Server host (default: {default_host})")
+    parser.add_argument("--port", type=int, default=default_port, help=f"Server port (default: {default_port})")
+    parser.add_argument("--share", action="store_true", help="Enable Gradio public share link")
 
 
 def _run_prepare_texture_lora_dataset(args: argparse.Namespace) -> int:
@@ -601,6 +634,30 @@ def _run_weak_ocr_label(args: argparse.Namespace) -> int:
 
 def _run_semantic_search_workbench(args: argparse.Namespace) -> int:
     return int(run_semantic_search_workbench(args))
+
+
+def _run_ocr_workbench(args: argparse.Namespace) -> int:
+    from scripts.ui_ocr_workbench import build_ui
+
+    app = build_ui()
+    app.launch(server_name=args.host, server_port=int(args.port), share=bool(args.share))
+    return 0
+
+
+def _run_layout_workbench(args: argparse.Namespace) -> int:
+    from scripts.ui_workbench import build_ui
+
+    app = build_ui()
+    app.launch(server_name=args.host, server_port=int(args.port), share=bool(args.share))
+    return 0
+
+
+def _run_transformer_layout_workbench(args: argparse.Namespace) -> int:
+    from scripts.ui_transformer_layout import build_demo
+
+    app = build_demo()
+    app.launch(server_name=args.host, server_port=int(args.port), share=bool(args.share))
+    return 0
 
 
 def _run_mine_mnn_pairs(args: argparse.Namespace) -> int:

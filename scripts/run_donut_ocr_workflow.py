@@ -52,8 +52,8 @@ def run(args) -> Dict[str, object]:
 
     if not args.skip_generation:
         generate_cmd = [
-            sys.executable,
-            str(REPO_ROOT / "generate_training_data.py"),
+        sys.executable,
+        str(REPO_ROOT / "scripts" / "generate_training_data.py"),
             "--train_samples",
             str(int(args.train_samples)),
             "--val_samples",

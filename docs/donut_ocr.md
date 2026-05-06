@@ -1,7 +1,7 @@
 # DONUT / TroCR OCR Training (OpenPecha / BDRC Line Manifests)
 
 For a detailed, step-by-step training playbook (including tiny pretraining/overfit flow and collapse diagnostics), see:
-[docs/donut_training_guide.md](docs/donut_training_guide.md)
+[donut_training_guide.md](donut_training_guide.md)
 
 ## Purpose
 

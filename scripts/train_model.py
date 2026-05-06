@@ -5,8 +5,14 @@ Unterstützt Weights & Biases (wandb) Logging für Experiment-Tracking.
 """
 
 import os
+import sys
 import tempfile
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import yaml
 from ultralytics import __version__ as ultralytics_version
 from ultralytics.data.utils import DATASETS_DIR
@@ -195,7 +201,7 @@ def main():
         print("  - Absoluter/relativer Pfad zu einem Datensatzordner mit data.yml")
         print("  - Absoluter/relativer Pfad direkt auf data.yml")
         print("Beispiel:")
-        print("python train_model.py --dataset ./datasets/tibetan-yolo --epochs 100")
+        print("python scripts/train_model.py --dataset ./datasets/tibetan-yolo --epochs 100")
         return
 
     normalized_data_path = normalize_dataset_yaml_for_ultralytics(data_path)
