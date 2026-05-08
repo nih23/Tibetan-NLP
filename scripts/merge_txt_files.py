@@ -15,9 +15,11 @@ import sys
 from pathlib import Path
 
 
-def main(argv: list[str] | None = None) -> int:
+def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="merge-txt-files",
         description="Merge all .txt files in a folder into one file.",
+        add_help=add_help,
     )
     parser.add_argument(
         "input_dir",
@@ -35,8 +37,10 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         help="Optional blank line(s) between entries (default: none).",
     )
-    args = parser.parse_args(argv)
+    return parser
 
+
+def run(args: argparse.Namespace) -> int:
     input_dir = Path(args.input_dir).expanduser().resolve()
     output_file = Path(args.output_file).expanduser().resolve()
 
@@ -63,6 +67,12 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"Merged {len(txt_files)} file(s) → {output_file}")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = create_parser()
+    args = parser.parse_args(argv)
+    return int(run(args))
 
 
 if __name__ == "__main__":

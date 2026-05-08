@@ -59,6 +59,30 @@ Available subcommands:
 - `download-openpecha-ocr-lines`
 - `download-openpecha-line-segmentation`
 - `train-line-segmentation`
+- `batch-ocr`
+- `merge-txt-files` (alias: `merge-txt`)
+
+## Batch OCR Transcript Utilities
+
+After `batch-ocr`, each page produces a separate `.txt` file in the output
+directory. Use `merge-txt-files` to concatenate all page-level transcripts into
+one document-level text file:
+
+```bash
+python cli.py merge-txt-files \
+  sbb_images_2__best__yolo_line \
+  merged_transcript.txt
+```
+
+The command writes each source filename before its content, preserving sorted
+page order. Use `--separator` to insert text between entries:
+
+```bash
+python cli.py merge-txt-files \
+  sbb_images_2__best__yolo_line \
+  merged_transcript.txt \
+  --separator ""
+```
 
 ## Semantic Search Workbench
 

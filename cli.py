@@ -54,6 +54,8 @@ from scripts.download_sbb_images import (
 )
 from scripts.eval_ocr_tokenizer import create_parser as create_eval_ocr_tokenizer_parser
 from scripts.extract_donut_ocr_errors import create_parser as create_extract_donut_ocr_errors_parser
+from scripts.merge_txt_files import create_parser as create_merge_txt_files_parser
+from scripts.merge_txt_files import run as run_merge_txt_files
 from scripts.ocr_error_review_workbench import create_parser as create_ocr_error_review_workbench_parser
 from scripts.summarize_donut_ocr_extraction_metrics import (
     create_parser as create_summarize_donut_ocr_extraction_metrics_parser,
@@ -348,6 +350,16 @@ def _build_root_parser() -> argparse.ArgumentParser:
     )
     batch_ocr_parser.set_defaults(handler=_run_batch_ocr)
 
+    merge_txt_parent = create_merge_txt_files_parser(add_help=False)
+    merge_txt_parser = subparsers.add_parser(
+        "merge-txt-files",
+        aliases=["merge-txt"],
+        parents=[merge_txt_parent],
+        help="Merge all .txt files in a folder into one file",
+        description=merge_txt_parent.description,
+    )
+    merge_txt_parser.set_defaults(handler=_run_merge_txt_files)
+
     gen_patches_parent = create_gen_patches_parser(add_help=False)
     gen_patches_parser = subparsers.add_parser(
         "gen-patches",
@@ -620,6 +632,10 @@ def _run_download_sbb_images_cmd(args: argparse.Namespace) -> int:
 
 def _run_batch_ocr(args: argparse.Namespace) -> int:
     return int(run_batch_ocr(args))
+
+
+def _run_merge_txt_files(args: argparse.Namespace) -> int:
+    return int(run_merge_txt_files(args))
 
 
 def _run_gen_patches(args: argparse.Namespace) -> int:
