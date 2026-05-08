@@ -48,6 +48,7 @@ from pechabridge.ocr.bdrc_model_download import (
     ensure_default_bdrc_line_assets,
     ensure_default_bdrc_ocr_models,
 )
+from pechabridge.ocr.donut_tta import run_donut_tta_on_page_box
 try:
     from pechabridge.ocr.preprocess_bdrc import (
         BDRCPreprocessConfig,
@@ -82,9 +83,11 @@ OCR_ENGINE_BDRC = "BDRC OCR"
 DEFAULT_BDRC_LINE_MERGE_LINES = True
 DEFAULT_UI_BDRC_LINE_USE_ROTATION = False
 DEFAULT_UI_BDRC_LINE_USE_TPS = False
+DEFAULT_TTA_VARIATIONS = 7
 _DONUT_ACTIVE_RUNTIME: Dict[str, Any] = {"checkpoint": "", "runtime": None}
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+_YOLO_LINE_BOX_PADDING_REL = 0.15
 
 
 def _scan_folder_for_images(folder_path: str) -> Tuple[List[str], str]:
@@ -504,12 +507,17 @@ def _rows_from_line_predictions(
 ) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for idx, pred in enumerate(predictions, start=1):
+        x1, y1, x2, y2 = [int(v) for v in pred.box]
+        box_w = max(0, x2 - x1)
+        box_h = max(0, y2 - y1)
+        pad_x = int(round(box_w * _YOLO_LINE_BOX_PADDING_REL))
+        pad_y = int(round(box_h * _YOLO_LINE_BOX_PADDING_REL))
         box = _normalize_box(
             [
-                int(offset_x) + int(pred.box[0]),
-                int(offset_y) + int(pred.box[1]),
-                int(offset_x) + int(pred.box[2]),
-                int(offset_y) + int(pred.box[3]),
+                int(offset_x) + x1 - pad_x,
+                int(offset_y) + y1 - pad_y,
+                int(offset_x) + x2 + pad_x,
+                int(offset_y) + y2 + pad_y,
             ],
             image_w,
             image_h,
@@ -1085,6 +1093,80 @@ def _run_bdrc_ocr_on_crop(
         }, pre_img, pre_img
 
 
+def _run_donut_tta_on_box(
+    full_image: np.ndarray,
+    line_box: List[int] | Tuple[int, int, int, int],
+    donut_checkpoint: str,
+    device: str,
+    max_len: int,
+    variations: int,
+    preprocess_preset: str = "bdrc",
+    bdrc_preprocess_overrides: Optional[Dict[str, Any]] = None,
+    rgb_preprocess_overrides: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, Dict[str, Any], np.ndarray, np.ndarray]:
+    src = np.asarray(full_image).astype(np.uint8, copy=False)
+    h, w = src.shape[:2]
+    box = _normalize_box(list(line_box or []), w, h)
+    if box is None:
+        raise ValueError("Invalid TTA line box.")
+    x1, y1, x2, y2 = box
+    original_crop = src[y1:y2, x1:x2]
+    pre_img, post_img, effective_preproc = _donut_preprocess_preview(
+        original_crop,
+        preprocess_preset=preprocess_preset,
+        bdrc_preprocess_overrides=bdrc_preprocess_overrides,
+        rgb_preprocess_overrides=rgb_preprocess_overrides,
+    )
+    if torch is None:
+        raise RuntimeError("PyTorch not available.")
+    runtime, rt_msg = _ensure_donut_runtime_loaded(donut_checkpoint, device)
+    if runtime is None:
+        raise RuntimeError(rt_msg)
+    effective_overrides = _effective_preprocess_overrides(
+        preprocess_preset=effective_preproc,
+        bdrc_preprocess_overrides=bdrc_preprocess_overrides,
+        rgb_preprocess_overrides=rgb_preprocess_overrides,
+    )
+
+    def _preprocess_for_tta(image: Image.Image) -> Image.Image:
+        return _apply_workbench_preprocess(
+            image=image,
+            preprocess_preset=effective_preproc,
+            bdrc_preprocess_overrides=bdrc_preprocess_overrides,
+            rgb_preprocess_overrides=rgb_preprocess_overrides,
+        )
+
+    effective_variations = max(1, int(variations))
+    effective_max_len = max(8, int(max_len))
+    consensus = run_donut_tta_on_page_box(
+        src,
+        box,
+        runtime,
+        preprocess_fn=_preprocess_for_tta,
+        variations=effective_variations,
+        max_distance=2,
+        max_len=effective_max_len,
+        generate_config=runtime.get("generate_config"),
+    )
+    debug = {
+        "ok": True,
+        "runtime_status": rt_msg,
+        "tta_enabled": True,
+        "tta_variations_requested": int(variations),
+        "tta_variations_effective": len(consensus.candidates),
+        "tta_max_levenshtein_distance": 2,
+        "tta_consensus": consensus.to_debug_dict(),
+        "line_box": list(box),
+        "image_preprocess_pipeline_requested": _normalize_preprocess_preset(preprocess_preset),
+        "image_preprocess_pipeline_effective": effective_preproc,
+        "preprocess_overrides_applied": bool(isinstance(effective_overrides, dict) and len(effective_overrides) > 0),
+        "preprocess_overrides": (dict(effective_overrides) if isinstance(effective_overrides, dict) else None),
+        "generation_max_length_effective": int(effective_max_len),
+        "device": str(runtime.get("device") or device),
+    }
+    return str(consensus.text or ""), debug, pre_img, post_img
+
+
 def _run_ocr_on_crop(
     crop: np.ndarray,
     *,
@@ -1096,6 +1178,9 @@ def _run_ocr_on_crop(
     preprocess_preset: str = "bdrc",
     bdrc_preprocess_overrides: Optional[Dict[str, Any]] = None,
     rgb_preprocess_overrides: Optional[Dict[str, Any]] = None,
+    tta_variations: int = 0,
+    full_image: Optional[np.ndarray] = None,
+    line_box: Optional[List[int] | Tuple[int, int, int, int]] = None,
 ) -> Tuple[str, Dict[str, Any], np.ndarray, np.ndarray]:
     engine = _normalize_ocr_engine(ocr_engine)
     if engine == OCR_ENGINE_BDRC:
@@ -1105,6 +1190,34 @@ def _run_ocr_on_crop(
             device=device,
             target_encoding="unicode",
         )
+    if int(tta_variations) > 0 and full_image is not None and line_box is not None:
+        try:
+            return _run_donut_tta_on_box(
+                full_image,
+                line_box,
+                donut_checkpoint,
+                device,
+                max_len,
+                int(tta_variations),
+                preprocess_preset=preprocess_preset,
+                bdrc_preprocess_overrides=bdrc_preprocess_overrides,
+                rgb_preprocess_overrides=rgb_preprocess_overrides,
+            )
+        except Exception as exc:
+            text, dbg, pre_img, post_img = _run_donut_on_crop(
+                crop,
+                donut_checkpoint,
+                device,
+                max_len,
+                preprocess_preset=preprocess_preset,
+                bdrc_preprocess_overrides=bdrc_preprocess_overrides,
+                rgb_preprocess_overrides=rgb_preprocess_overrides,
+            )
+            dbg = dict(dbg)
+            dbg["tta_enabled"] = True
+            dbg["tta_error"] = f"{type(exc).__name__}: {exc}"
+            dbg["tta_fallback"] = "single_crop"
+            return text, dbg, pre_img, post_img
     return _run_donut_on_crop(
         crop,
         donut_checkpoint,
@@ -1402,6 +1515,7 @@ def _run_full_auto(
     preprocess_preset: str = "bdrc",
     bdrc_preprocess_overrides: Optional[Dict[str, Any]] = None,
     rgb_preprocess_overrides: Optional[Dict[str, Any]] = None,
+    tta_variations: int = 0,
 ) -> Tuple[np.ndarray, str, str, Dict[str, Any], str, Optional[np.ndarray], Optional[np.ndarray]]:
     image = state.get("image")
     if image is None:
@@ -1469,6 +1583,9 @@ def _run_full_auto(
             preprocess_preset=preprocess_preset,
             bdrc_preprocess_overrides=bdrc_preprocess_overrides,
             rgb_preprocess_overrides=rgb_preprocess_overrides,
+            tta_variations=tta_variations if engine == OCR_ENGINE_DONUT else 0,
+            full_image=src,
+            line_box=list(box),
         )
         last_pre, last_post = pre_img, post_img
         rows.append(
@@ -1513,6 +1630,7 @@ def _run_full_auto(
             else (str(bdrc_line_model or "") if mode == LINE_SEG_BDRC else "")
         ),
         "image_preprocess_pipeline": _normalize_preprocess_preset(preprocess_preset),
+        "tta_variations": int(tta_variations) if engine == OCR_ENGINE_DONUT else 0,
         "preprocess_overrides": _effective_preprocess_overrides(
             preprocess_preset=preprocess_preset,
             bdrc_preprocess_overrides=bdrc_preprocess_overrides,
@@ -1919,6 +2037,7 @@ def _manual_click(
     preprocess_preset: str,
     bdrc_preprocess_overrides: Optional[Dict[str, Any]],
     rgb_preprocess_overrides: Optional[Dict[str, Any]],
+    tta_variations: int,
     evt: gr.SelectData,
 ) -> Tuple[np.ndarray, str, str, Dict[str, Any], str, Optional[np.ndarray], Optional[np.ndarray]]:
     image = state.get("image")
@@ -1968,6 +2087,9 @@ def _manual_click(
             preprocess_preset=preprocess_preset,
             bdrc_preprocess_overrides=bdrc_preprocess_overrides,
             rgb_preprocess_overrides=rgb_preprocess_overrides,
+            tta_variations=tta_variations if engine == OCR_ENGINE_DONUT else 0,
+            full_image=src,
+            line_box=list(hit.get("line_box") or []),
         )
         new_row = dict(hit)
         new_row["text"] = text
@@ -1980,7 +2102,14 @@ def _manual_click(
         state["last_debug_text"] = str(text or "")
         overlay = _render_overlay(src, rows)
         return overlay, _line_text(rows), f"Re-transcribed line at click ({click_x},{click_y}).", state, json.dumps(
-            {"ok": True, "mode": "manual", "action": "clicked_existing_line", "line_box": new_row["line_box"]},
+            {
+                "ok": True,
+                "mode": "manual",
+                "action": "clicked_existing_line",
+                "line_box": new_row["line_box"],
+                "tta_variations": int(tta_variations) if engine == OCR_ENGINE_DONUT else 0,
+                "ocr_debug": dbg,
+            },
             ensure_ascii=False,
             indent=2,
         ), state.get("last_donut_pre"), state.get("last_donut_post")
@@ -2020,6 +2149,7 @@ def _manual_click(
         preprocess_preset=preprocess_preset,
         bdrc_preprocess_overrides=bdrc_preprocess_overrides,
         rgb_preprocess_overrides=rgb_preprocess_overrides,
+        tta_variations=tta_variations,
     )
 
 
@@ -2044,6 +2174,7 @@ def _manual_process_roi(
     preprocess_preset: str = "bdrc",
     bdrc_preprocess_overrides: Optional[Dict[str, Any]] = None,
     rgb_preprocess_overrides: Optional[Dict[str, Any]] = None,
+    tta_variations: int = 0,
 ) -> Tuple[np.ndarray, str, str, Dict[str, Any], str, Optional[np.ndarray], Optional[np.ndarray]]:
     image = state.get("image")
     if image is None:
@@ -2092,6 +2223,9 @@ def _manual_process_roi(
             preprocess_preset=preprocess_preset,
             bdrc_preprocess_overrides=bdrc_preprocess_overrides,
             rgb_preprocess_overrides=rgb_preprocess_overrides,
+            tta_variations=tta_variations if engine == OCR_ENGINE_DONUT else 0,
+            full_image=src,
+            line_box=[rx1, ry1, rx2, ry2],
         )
         last_pre, last_post = pre_img, post_img
         created_rows.append(
@@ -2196,6 +2330,9 @@ def _manual_process_roi(
                 preprocess_preset=preprocess_preset,
                 bdrc_preprocess_overrides=bdrc_preprocess_overrides,
                 rgb_preprocess_overrides=rgb_preprocess_overrides,
+                tta_variations=tta_variations if engine == OCR_ENGINE_DONUT else 0,
+                full_image=src,
+                line_box=list(gbox),
             )
             last_pre, last_post = pre_img, post_img
             created_rows.append(
@@ -2227,6 +2364,9 @@ def _manual_process_roi(
                 preprocess_preset=preprocess_preset,
                 bdrc_preprocess_overrides=bdrc_preprocess_overrides,
                 rgb_preprocess_overrides=rgb_preprocess_overrides,
+                tta_variations=tta_variations if engine == OCR_ENGINE_DONUT else 0,
+                full_image=src,
+                line_box=[rx1, ry1, rx2, ry2],
             )
             last_pre, last_post = pre_img, post_img
             created_rows.append(
@@ -2273,6 +2413,7 @@ def _manual_process_roi(
             else (str(bdrc_line_model or "") if mode == LINE_SEG_BDRC else "")
         ),
         "image_preprocess_pipeline": _normalize_preprocess_preset(preprocess_preset),
+        "tta_variations": int(tta_variations) if engine == OCR_ENGINE_DONUT else 0,
         "preprocess_overrides": _effective_preprocess_overrides(
             preprocess_preset=preprocess_preset,
             bdrc_preprocess_overrides=bdrc_preprocess_overrides,
@@ -2325,6 +2466,7 @@ def _manual_full_image_roi(
     preprocess_preset: str = "bdrc",
     bdrc_preprocess_overrides: Optional[Dict[str, Any]] = None,
     rgb_preprocess_overrides: Optional[Dict[str, Any]] = None,
+    tta_variations: int = 0,
 ) -> Tuple[np.ndarray, str, str, Dict[str, Any], str, Optional[np.ndarray], Optional[np.ndarray]]:
     if not _is_manual_mode(mode_s):
         img = state_s.get("image")
@@ -2356,6 +2498,7 @@ def _manual_full_image_roi(
         preprocess_preset=preprocess_preset,
         bdrc_preprocess_overrides=bdrc_preprocess_overrides,
         rgb_preprocess_overrides=rgb_preprocess_overrides,
+        tta_variations=tta_variations,
     )
 
 
@@ -2856,6 +2999,9 @@ function() {
                 label="OCR Engine",
             )
         with gr.Row():
+            high_accuracy_mode = gr.Checkbox(label="High Accuracy Mode (DONUT TTA)", value=False)
+            tta_variations = gr.Number(label="TTA variations", value=DEFAULT_TTA_VARIATIONS, precision=0)
+        with gr.Row():
             line_segmentation_mode = gr.Radio(
                 choices=[LINE_SEG_CLASSICAL, LINE_SEG_YOLO, LINE_SEG_BDRC],
                 value=LINE_SEG_CLASSICAL,
@@ -3196,6 +3342,8 @@ function() {
             bdrc_line_tps_threshold_s: float,
             device_s: str,
             max_len_s: int,
+            high_accuracy_mode_s: bool,
+            tta_variations_s: int,
             preprocess_preset_s: str,
             gray_mode_s: str,
             normalize_background_s: bool,
@@ -3261,6 +3409,11 @@ function() {
                 rgb_ink_normalization=rgb_ink_normalization_s,
                 rgb_ink_strength=float(rgb_ink_strength_s),
             )
+            effective_tta_variations = (
+                max(1, int(tta_variations_s or DEFAULT_TTA_VARIATIONS))
+                if bool(high_accuracy_mode_s) and _normalize_ocr_engine(ocr_engine_s) == OCR_ENGINE_DONUT
+                else 0
+            )
             if not _is_manual_mode(mode_s):
                 return _run_full_auto(
                     state_s,
@@ -3283,6 +3436,7 @@ function() {
                     preprocess_preset=preproc_mode,
                     bdrc_preprocess_overrides=bdrc_overrides,
                     rgb_preprocess_overrides=rgb_overrides,
+                    tta_variations=effective_tta_variations,
                 )
             img = state_s.get("image")
             overlay = np.asarray(img).astype(np.uint8, copy=False) if img is not None else None
@@ -3307,6 +3461,7 @@ function() {
                     else (str(bdrc_line_model_s or "") if _normalize_line_segmentation_mode(line_segmentation_mode_s) == LINE_SEG_BDRC else "")
                 ),
                 "image_preprocess_pipeline": preproc_mode,
+                "tta_variations": effective_tta_variations,
                 "preprocess_overrides": _effective_preprocess_overrides(
                     preprocess_preset=preproc_mode,
                     bdrc_preprocess_overrides=bdrc_overrides,
@@ -3344,6 +3499,8 @@ function() {
             bdrc_line_tps_threshold_s: float,
             device_s: str,
             max_len_s: int,
+            high_accuracy_mode_s: bool,
+            tta_variations_s: int,
             preprocess_preset_s: str,
             gray_mode_s: str,
             normalize_background_s: bool,
@@ -3383,7 +3540,10 @@ function() {
                 line_segmentation_mode=line_segmentation_mode_s,
                 bdrc_line_model=bdrc_line_model_s,
             )
-            status_msg = " ".join(pending_notes) if pending_notes else "Running OCR..."
+            tta_active = bool(high_accuracy_mode_s) and _normalize_ocr_engine(ocr_engine_s) == OCR_ENGINE_DONUT
+            status_msg = " ".join(pending_notes) if pending_notes else (
+                "Running OCR with DONUT TTA..." if tta_active else "Running OCR..."
+            )
             # ── Loading state: clear preview images, show spinner overlay ──
             yield (
                 gr.update(),
@@ -3413,6 +3573,8 @@ function() {
                 bdrc_line_tps_threshold_s,
                 device_s,
                 max_len_s,
+                high_accuracy_mode_s,
+                tta_variations_s,
                 preprocess_preset_s,
                 gray_mode_s,
                 normalize_background_s,
@@ -3479,6 +3641,8 @@ function() {
                 bdrc_line_tps_threshold,
                 device,
                 max_len,
+                high_accuracy_mode,
+                tta_variations,
                 preprocess_preset,
                 bdrc_gray_mode,
                 bdrc_normalize_bg,
@@ -3539,6 +3703,8 @@ function() {
             bdrc_line_tps_threshold_s: float,
             device_s: str,
             max_len_s: int,
+            high_accuracy_mode_s: bool,
+            tta_variations_s: int,
             preprocess_preset_s: str,
             gray_mode_s: str,
             normalize_background_s: bool,
@@ -3604,6 +3770,11 @@ function() {
                 rgb_upscale_interpolation=rgb_upscale_interp_s,
                 rgb_ink_normalization=rgb_ink_normalization_s,
                 rgb_ink_strength=float(rgb_ink_strength_s),
+            )
+            effective_tta_variations = (
+                max(1, int(tta_variations_s or DEFAULT_TTA_VARIATIONS))
+                if bool(high_accuracy_mode_s) and _normalize_ocr_engine(ocr_engine_s) == OCR_ENGINE_DONUT
+                else 0
             )
             if not _is_manual_mode(mode_s):
                 image = state_s.get("image")
@@ -3704,6 +3875,9 @@ function() {
                     preprocess_preset=preproc_mode,
                     bdrc_preprocess_overrides=bdrc_overrides,
                     rgb_preprocess_overrides=rgb_overrides,
+                    tta_variations=effective_tta_variations if engine == OCR_ENGINE_DONUT else 0,
+                    full_image=src,
+                    line_box=box,
                 )
                 new_row = dict(hit)
                 new_row["text"] = text
@@ -3735,6 +3909,7 @@ function() {
                         else (str(bdrc_line_model_s or "") if _normalize_line_segmentation_mode(line_segmentation_mode_s) == LINE_SEG_BDRC else "")
                     ),
                     "image_preprocess_pipeline": preproc_mode,
+                    "tta_variations": effective_tta_variations,
                     "preprocess_overrides": _effective_preprocess_overrides(
                         preprocess_preset=preproc_mode,
                         bdrc_preprocess_overrides=bdrc_overrides,
@@ -3776,6 +3951,7 @@ function() {
                 preproc_mode,
                 bdrc_overrides,
                 rgb_overrides,
+                effective_tta_variations,
                 evt,
             )
 
@@ -3800,6 +3976,8 @@ function() {
                 bdrc_line_tps_threshold,
                 device,
                 max_len,
+                high_accuracy_mode,
+                tta_variations,
                 preprocess_preset,
                 bdrc_gray_mode,
                 bdrc_normalize_bg,
@@ -3858,6 +4036,8 @@ function() {
             bdrc_line_tps_threshold_s: float,
             device_s: str,
             max_len_s: int,
+            high_accuracy_mode_s: bool,
+            tta_variations_s: int,
             preprocess_preset_s: str,
             gray_mode_s: str,
             normalize_background_s: bool,
@@ -3923,6 +4103,11 @@ function() {
                 rgb_ink_normalization=rgb_ink_normalization_s,
                 rgb_ink_strength=float(rgb_ink_strength_s),
             )
+            effective_tta_variations = (
+                max(1, int(tta_variations_s or DEFAULT_TTA_VARIATIONS))
+                if bool(high_accuracy_mode_s) and _normalize_ocr_engine(ocr_engine_s) == OCR_ENGINE_DONUT
+                else 0
+            )
             return _manual_full_image_roi(
                 mode_s,
                 state_s,
@@ -3944,6 +4129,7 @@ function() {
                 preprocess_preset=preproc_mode,
                 bdrc_preprocess_overrides=bdrc_overrides,
                 rgb_preprocess_overrides=rgb_overrides,
+                tta_variations=effective_tta_variations,
             )
 
         _fullroi_evt = full_roi_btn.click(
@@ -3966,6 +4152,8 @@ function() {
                 bdrc_line_tps_threshold,
                 device,
                 max_len,
+                high_accuracy_mode,
+                tta_variations,
                 preprocess_preset,
                 bdrc_gray_mode,
                 bdrc_normalize_bg,
@@ -4634,6 +4822,8 @@ function() {
             bdrc_line_tps_threshold_s: float,
             device_s: str,
             max_len_s: int,
+            high_accuracy_mode_s: bool,
+            tta_variations_s: int,
             preprocess_preset_s: str,
             gray_mode_s: str,
             normalize_background_s: bool,
@@ -4722,6 +4912,11 @@ function() {
                 rgb_ink_normalization=rgb_ink_normalization_s,
                 rgb_ink_strength=float(rgb_ink_strength_s),
             )
+            effective_tta_variations = (
+                max(1, int(tta_variations_s or DEFAULT_TTA_VARIATIONS))
+                if bool(high_accuracy_mode_s) and _normalize_ocr_engine(ocr_engine_s) == OCR_ENGINE_DONUT
+                else 0
+            )
 
             # Run full-auto OCR (line segmentation + DONUT)
             overlay, transcript_text, ocr_status, updated_state, debug_j, pre_img, post_img = _run_full_auto(
@@ -4745,6 +4940,7 @@ function() {
                 preprocess_preset=preproc_mode,
                 bdrc_preprocess_overrides=bdrc_overrides,
                 rgb_preprocess_overrides=rgb_overrides,
+                tta_variations=effective_tta_variations,
             )
             return overlay, transcript_text, ocr_status, updated_state, debug_j, pre_img, post_img
 
@@ -4768,6 +4964,8 @@ function() {
                 bdrc_line_tps_threshold,
                 device,
                 max_len,
+                high_accuracy_mode,
+                tta_variations,
                 preprocess_preset,
                 bdrc_gray_mode,
                 bdrc_normalize_bg,

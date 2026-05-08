@@ -71,6 +71,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from pechabridge.ocr.donut_tta import run_donut_tta_on_page_box
+
 LOGGER = logging.getLogger("pechabridge.cli.batch_ocr")
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -78,6 +80,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Image extensions we consider
 # ---------------------------------------------------------------------------
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
+_YOLO_LINE_BOX_PADDING_REL = 0.15
 
 
 # ---------------------------------------------------------------------------
@@ -542,10 +545,14 @@ def _detect_lines_yolo_model(
     records: List[Dict[str, Any]] = []
     for idx, pred in enumerate(predictions, start=1):
         x1, y1, x2, y2 = [int(v) for v in pred.box]
-        x1 = max(0, min(w - 1, x1))
-        y1 = max(0, min(h - 1, y1))
-        x2 = max(0, min(w, x2))
-        y2 = max(0, min(h, y2))
+        box_w = max(0, x2 - x1)
+        box_h = max(0, y2 - y1)
+        pad_x = int(round(box_w * _YOLO_LINE_BOX_PADDING_REL))
+        pad_y = int(round(box_h * _YOLO_LINE_BOX_PADDING_REL))
+        x1 = max(0, min(w - 1, x1 - pad_x))
+        y1 = max(0, min(h - 1, y1 - pad_y))
+        x2 = max(0, min(w, x2 + pad_x))
+        y2 = max(0, min(h, y2 + pad_y))
         if x2 <= x1 or y2 <= y1:
             continue
         records.append(
@@ -797,6 +804,7 @@ def _ocr_image(
     bdrc_line_use_rotation: bool = False,
     bdrc_line_use_tps: bool = False,
     bdrc_line_tps_threshold: float = 0.25,
+    tta_variations: int = 0,
 ) -> Tuple[str, int, Any, List[Dict[str, Any]]]:
     """Run full OCR on a single image.
 
@@ -805,6 +813,9 @@ def _ocr_image(
     ``image_np`` is the original image as a ``np.ndarray`` (HxWx3 uint8) and
     ``line_records`` is the list of detected line dicts (each with a
     ``"line_box"`` key) so the caller can render an overlay image.
+
+    ``tta_variations`` enables DONUT test-time augmentation for each detected
+    page-level line box.  ``0`` preserves the historical single-crop path.
 
     ``layout_engine`` controls how line bounding boxes are detected:
     - ``"cv"``        (default) Classical CV segmentation via
@@ -859,7 +870,6 @@ def _ocr_image(
         # Store the normalised box back so the overlay uses clipped coordinates
         rec_with_norm = dict(rec)
         rec_with_norm["line_box"] = list(box)
-        valid_records.append(rec_with_norm)
 
         crop_np = rec.get("ocr_crop")
         if not isinstance(crop_np, np.ndarray) or crop_np.size == 0:
@@ -871,10 +881,35 @@ def _ocr_image(
         elif engine == "bdrc_ocr":
             text = _ocr_crop_bdrc(crop_pil, runtime)
         else:
-            text = _ocr_crop_donut(crop_pil, runtime, pipeline, max_len)
+            if int(tta_variations) > 0:
+                try:
+                    consensus = run_donut_tta_on_page_box(
+                        img_pil,
+                        box,
+                        runtime,
+                        preprocess_fn=lambda im: _apply_preprocess(im, pipeline),
+                        variations=int(tta_variations),
+                        max_distance=2,
+                        max_len=max_len,
+                        generate_config=runtime.get("generate_config"),
+                    )
+                    text = consensus.text.strip()
+                    rec_with_norm["ocr_tta"] = consensus.to_debug_dict()
+                except Exception as exc:
+                    LOGGER.warning(
+                        "  TTA failed for %s line %s (%s); falling back to single crop.",
+                        image_path.name,
+                        rec.get("line_id", len(lines) + 1),
+                        exc,
+                    )
+                    text = _ocr_crop_donut(crop_pil, runtime, pipeline, max_len)
+                    rec_with_norm["ocr_tta"] = {"ok": False, "error": str(exc), "fallback": "single_crop"}
+            else:
+                text = _ocr_crop_donut(crop_pil, runtime, pipeline, max_len)
 
         line_id = int(rec.get("line_id", len(lines) + 1))
         lines.append((y1, line_id, text))
+        valid_records.append(rec_with_norm)
 
     # Sort top-to-bottom, then left-to-right by line_id as tiebreaker
     lines.sort(key=lambda t: (t[0], t[1]))
@@ -898,6 +933,7 @@ def _write_repro_yaml(
     pipeline_source: str,
     device: str,
     max_len: int,
+    tta_variations: int,
     tess_lang: str,
     tess_psm: int,
     tess_oem: int,
@@ -938,6 +974,7 @@ def _write_repro_yaml(
             "preprocess_pipeline: " + _yaml_str(pipeline),
             "pipeline_source: " + _yaml_str(pipeline_source),
             "max_len: " + str(max_len),
+            "tta_variations: " + str(max(0, int(tta_variations))),
         ]
 
     if layout_engine == "tesseract":
@@ -1064,6 +1101,7 @@ def run(args: argparse.Namespace) -> int:
 
     # DONUT-specific args
     ocr_model = str(getattr(args, "ocr_model", "") or "").strip()
+    tta_variations = max(0, int(getattr(args, "tta_variations", 0) or 0))
     bdrc_ocr_model = str(getattr(args, "bdrc_ocr_model", "") or "").strip()
     bdrc_ocr_target_encoding = str(getattr(args, "bdrc_ocr_target_encoding", "unicode") or "unicode").strip().lower()
 
@@ -1226,6 +1264,7 @@ def run(args: argparse.Namespace) -> int:
         LOGGER.info("  bdrc_line_model : %s", bdrc_line_model)
     if engine == "donut":
         LOGGER.info("  ocr_model     : %s", ocr_model)
+        LOGGER.info("  tta_variations: %d", tta_variations)
     elif engine == "bdrc_ocr":
         LOGGER.info("  bdrc_ocr_model: %s", bdrc_ocr_model)
     elif engine == "tesseract":
@@ -1326,6 +1365,8 @@ def run(args: argparse.Namespace) -> int:
         cli_argv_repro += ["--ocr-model", ocr_model]
         if max_len > 0:
             cli_argv_repro += ["--max-len", str(max_len)]
+        if tta_variations > 0:
+            cli_argv_repro += ["--tta-variations", str(tta_variations)]
     if layout_engine == "tesseract":
         cli_argv_repro += [
             "--tess-layout-lang", tess_layout_lang,
@@ -1344,6 +1385,7 @@ def run(args: argparse.Namespace) -> int:
         pipeline_source=pipeline_source,
         device=device,
         max_len=max_len,
+        tta_variations=tta_variations if engine == "donut" else 0,
         tess_lang=tess_lang,
         tess_psm=tess_psm,
         tess_oem=tess_oem,
@@ -1386,6 +1428,7 @@ def run(args: argparse.Namespace) -> int:
                 bdrc_line_use_rotation=bdrc_line_use_rotation,
                 bdrc_line_use_tps=bdrc_line_use_tps,
                 bdrc_line_tps_threshold=bdrc_line_tps_threshold,
+                tta_variations=tta_variations if engine == "donut" else 0,
             )
             total_lines += n_lines
         except Exception as exc:
@@ -1761,6 +1804,19 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
             "Override the DONUT generation max_length. "
             "0 means use the value from the repro bundle's generate_config.json, "
             "or fall back to 160 if not present. Default: 0 (use repro config)."
+        ),
+    )
+    donut_group.add_argument(
+        "--tta-variations",
+        "--tta_variations",
+        dest="tta_variations",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "Enable DONUT test-time augmentation with up to N clipped line-box crops. "
+            "0 disables TTA and preserves single-crop inference. Default: 0. "
+            "A good high-accuracy value is 7."
         ),
     )
 
