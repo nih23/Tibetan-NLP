@@ -349,6 +349,15 @@ def create_parser(add_help: bool = True) -> argparse.ArgumentParser:
     parser.add_argument("--patience", type=int, default=50, help="Early stopping patience.")
     parser.add_argument("--seed", type=int, default=42, help="Training seed.")
     parser.add_argument("--cache", type=str, default="", help="Ultralytics cache mode, e.g. ram or disk.")
+    parser.add_argument("--rect", action="store_true", help="Enable rectangular training in Ultralytics.")
+    parser.add_argument("--mosaic", type=float, default=None, help="Ultralytics mosaic augmentation probability.")
+    parser.add_argument(
+        "--overlap-mask",
+        dest="overlap_mask",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Whether segmentation masks should overlap during Ultralytics training.",
+    )
     parser.add_argument("--resume", action="store_true", help="Resume the latest interrupted run for this project/name.")
     parser.add_argument("--export", action="store_true", help="Export the best model as TorchScript after training.")
     parser.add_argument(
@@ -451,6 +460,12 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         train_kwargs["device"] = str(args.device).strip()
     if str(args.cache or "").strip():
         train_kwargs["cache"] = str(args.cache).strip()
+    if bool(getattr(args, "rect", False)):
+        train_kwargs["rect"] = True
+    if getattr(args, "mosaic", None) is not None:
+        train_kwargs["mosaic"] = float(args.mosaic)
+    if getattr(args, "overlap_mask", None) is not None:
+        train_kwargs["overlap_mask"] = bool(args.overlap_mask)
 
     try:
         model = YOLO(model_name)
@@ -489,6 +504,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             "requested_training_image_preprocess_pipeline": requested_preprocess_pipeline,
             "effective_training_image_preprocess_pipeline": effective_preprocess_pipeline,
             "preprocessing_summary": preprocessing_summary,
+            "rect": bool(getattr(args, "rect", False)),
+            "mosaic": getattr(args, "mosaic", None),
+            "overlap_mask": getattr(args, "overlap_mask", None),
             "epochs": int(args.epochs),
             "imgsz": int(args.imgsz),
             "batch": int(args.batch),

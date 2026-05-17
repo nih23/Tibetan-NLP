@@ -342,6 +342,10 @@ python cli.py train-line-segmentation \
   --dataset ./datasets/openpecha_line_segmentation/data.yaml \
   --model yolo11n-seg.pt \
   --image-preprocess-pipeline gray \
+  --imgsz 1024 \
+  --rect \
+  --mosaic 0.0 \
+  --no-overlap-mask \
   --epochs 100 \
   --project ./runs/segment \
   --name tibetan-line-seg
