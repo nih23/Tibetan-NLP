@@ -87,6 +87,7 @@ DEFAULT_BDRC_LINE_MERGE_LINES = True
 DEFAULT_UI_BDRC_LINE_USE_ROTATION = False
 DEFAULT_UI_BDRC_LINE_USE_TPS = False
 DEFAULT_TTA_VARIATIONS = 7
+SAVE_JPEG_QUALITY = 88
 _DONUT_ACTIVE_RUNTIME: Dict[str, Any] = {"checkpoint": "", "runtime": None}
 
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp"}
@@ -2603,8 +2604,20 @@ def _save_results(
     src = np.asarray(image).astype(np.uint8, copy=False)
     rows = _sort_lines(list(state.get("line_rows") or []))
     overlay = _render_overlay(src, rows)
-    Image.fromarray(src).save(out_dir / "source.png")
-    Image.fromarray(overlay).save(out_dir / "overlay.png")
+    Image.fromarray(src).convert("RGB").save(
+        out_dir / "source.jpg",
+        format="JPEG",
+        quality=SAVE_JPEG_QUALITY,
+        optimize=True,
+        progressive=True,
+    )
+    Image.fromarray(overlay).convert("RGB").save(
+        out_dir / "overlay.jpg",
+        format="JPEG",
+        quality=SAVE_JPEG_QUALITY,
+        optimize=True,
+        progressive=True,
+    )
     (out_dir / "transcript.txt").write_text(str(transcript_text or ""), encoding="utf-8")
 
     saved_rows: List[Dict[str, Any]] = []
@@ -2614,8 +2627,14 @@ def _save_results(
         if box is None:
             continue
         crop = _extract_row_crop(src, rec)
-        crop_name = f"line_{i:03d}.png"
-        Image.fromarray(crop).save(out_dir / crop_name)
+        crop_name = f"line_{i:03d}.jpg"
+        Image.fromarray(crop).convert("RGB").save(
+            out_dir / crop_name,
+            format="JPEG",
+            quality=SAVE_JPEG_QUALITY,
+            optimize=True,
+            progressive=True,
+        )
         obj = dict(rec)
         obj.pop("ocr_crop", None)
         obj["line_no"] = i
@@ -2651,6 +2670,8 @@ def _save_results(
         ),
         "yolo_line_segmentation_model": str(line_model or ""),
         "bdrc_line_model": str(bdrc_line_model or ""),
+        "export_image_format": "JPEG",
+        "export_jpeg_quality": SAVE_JPEG_QUALITY,
         "line_count": len(saved_rows),
         "lines": saved_rows,
     }
@@ -2970,8 +2991,7 @@ function() {
         # ── Folder Browser ──────────────────────────────────────────────────
         with gr.Accordion("📁 Folder Browser", open=True):
             gr.Markdown(
-                "Enter an SBB PPN. Missing PPNs are downloaded in full with metadata to "
-                "`sbb_images/<PPN>`. Advanced View also allows a local image folder."
+                "Enter a Staatsbibliothek zu Berlin PPN to load a digitized work; the PPN is listed in its catalogue record and URL in the [SBB Digital Collections](https://digital.staatsbibliothek-berlin.de/)."
             )
             with gr.Row(visible=False) as advanced_folder_path_row:
                 folder_path_input = gr.Textbox(
