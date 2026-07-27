@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
@@ -2532,10 +2533,13 @@ def _save_results(
     line_segmentation_preprocess: str,
     line_model: str,
     bdrc_line_model: str,
-) -> str:
+) -> Tuple[str, Any]:
     image = state.get("image")
     if image is None:
-        return "Nothing to save: no image loaded."
+        return (
+            "Nothing to save: no image loaded.",
+            gr.update(value=None, interactive=False),
+        )
     name = str(state.get("image_name") or "image.png")
     stem = Path(name).stem
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -2597,7 +2601,11 @@ def _save_results(
         "lines": saved_rows,
     }
     (out_dir / "line_boxes_ocr.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    return f"Saved to: {out_dir}"
+    zip_path = Path(shutil.make_archive(str(out_dir), "zip", root_dir=out_dir)).resolve()
+    return (
+        f"Saved to: {out_dir}\nZIP ready: {zip_path}",
+        gr.update(value=str(zip_path), interactive=True),
+    )
 
 
 def build_ui() -> gr.Blocks:
@@ -2683,17 +2691,6 @@ def build_ui() -> gr.Blocks:
 }
 #ocr_image_wrap {
   position: relative;
-}
-#img_zoom_row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 4px;
-}
-#img_zoom_minus, #img_zoom_plus, #img_zoom_reset {
-  min-width: 36px !important;
-  width: 36px !important;
-  padding: 0 !important;
 }
 #transcript_panel {
   min-height: 200px;
@@ -2901,26 +2898,20 @@ function() {
         _bdrc_line_label = bdrc_line_model_choices[0][0] if bdrc_line_model_choices else "—"
         _bdrc_ocr_label = bdrc_ocr_model_choices[0][0] if bdrc_ocr_model_choices else "—"
 
-        # ── Top bar: title + model status + advanced toggle ─────────────────
+        # ── Top bar ─────────────────────────────────────────────────────────
         with gr.Row(equal_height=True):
-            with gr.Column(scale=6):
+            with gr.Column(scale=10):
                 gr.Markdown("## OCR Workbench")
-            with gr.Column(scale=4):
-                # ── Compact model info (shown in simple mode) ───────────────
-                with gr.Row() as model_info_row:
-                    gr.Markdown(
-                        f"🤖 DONUT `{_donut_label}`  &nbsp;|&nbsp;  🪵 BDRC OCR `{_bdrc_ocr_label}`"
-                        f"  &nbsp;|&nbsp;  📐 Layout `{_layout_label}`  &nbsp;|&nbsp;  "
-                        f"📏 YOLO `{_line_label}` / BDRC `{_bdrc_line_label}`",
-                        elem_id="model_info_md",
-                    )
             with gr.Column(scale=1, min_width=140):
                 advanced_view = gr.Checkbox(label="Advanced View", value=False)
 
-        gr.Markdown(
-            "Automatic mode: choose classical CV, a pretrained YOLO line model, or the BDRC line model, "
-            "then run DONUT or BDRC OCR. Manual mode: click an existing line or define an ROI with two clicks."
-        )
+        with gr.Row(visible=False) as model_info_row:
+            gr.Markdown(
+                f"🤖 DONUT `{_donut_label}`  &nbsp;|&nbsp;  🪵 BDRC OCR `{_bdrc_ocr_label}`"
+                f"  &nbsp;|&nbsp;  📐 Layout `{_layout_label}`  &nbsp;|&nbsp;  "
+                f"📏 YOLO `{_line_label}` / BDRC `{_bdrc_line_label}`",
+                elem_id="model_info_md",
+            )
 
         # ── Folder Browser ──────────────────────────────────────────────────
         with gr.Accordion("📁 Folder Browser", open=True):
@@ -2998,7 +2989,7 @@ function() {
                 value=OCR_ENGINE_DONUT,
                 label="OCR Engine",
             )
-        with gr.Row():
+        with gr.Row(visible=False) as advanced_accuracy_row:
             high_accuracy_mode = gr.Checkbox(label="High Accuracy Mode (DONUT TTA)", value=False)
             tta_variations = gr.Number(label="TTA variations", value=DEFAULT_TTA_VARIATIONS, precision=0)
         with gr.Row():
@@ -3253,6 +3244,9 @@ function() {
                         label="upscale_interpolation",
                     )
 
+        with gr.Row(visible=False) as advanced_compare_row:
+            compare_btn = gr.Button("⚖ Compare All Models", variant="secondary")
+
         status = gr.Textbox(label="Status", interactive=False, elem_id="ocr_status_box")
         with gr.Accordion("Debug JSON", open=False, visible=False) as debug_json_accordion:
             debug_json = gr.Code(language="json")
@@ -3278,15 +3272,16 @@ function() {
         state = gr.State(_base_state())
         with gr.Row():
             run_btn = gr.Button("Run OCR", variant="primary", elem_id="run_ocr_btn")
-            compare_btn = gr.Button("⚖ Compare All Models", variant="secondary")
             full_roi_btn = gr.Button("Process Full Image as ROI", visible=False)
             save_btn = gr.Button("Save", variant="secondary")
+            download_btn = gr.DownloadButton(
+                "Download ZIP",
+                value=None,
+                variant="secondary",
+                interactive=False,
+            )
 
         # ── Image row (full width) ──────────────────────────────────────────
-        with gr.Row(elem_id="img_zoom_row"):
-            img_zoom_out_btn = gr.Button("🔍−", elem_id="img_zoom_minus", scale=0, min_width=36)
-            img_zoom_reset_btn = gr.Button("⊙", elem_id="img_zoom_reset", scale=0, min_width=36)
-            img_zoom_in_btn = gr.Button("🔍+", elem_id="img_zoom_plus", scale=0, min_width=36)
         with gr.Column(elem_id="ocr_image_wrap"):
             gr.HTML(
                 '<div id="ocr_loading_overlay">'
@@ -4363,7 +4358,7 @@ function() {
                 line_model_path,
                 bdrc_line_model_path,
             ],
-            outputs=[save_status],
+            outputs=[save_status, download_btn],
         )
 
         font_plus_btn.click(
@@ -4392,10 +4387,6 @@ function() {
 }
 """,
         )
-
-        img_zoom_in_btn.click(fn=None, js="() => { const p = document.querySelector('#ocr_image_panel'); if (p && p._zoomIn) p._zoomIn(); }")
-        img_zoom_out_btn.click(fn=None, js="() => { const p = document.querySelector('#ocr_image_panel'); if (p && p._zoomOut) p._zoomOut(); }")
-        img_zoom_reset_btn.click(fn=None, js="() => { const p = document.querySelector('#ocr_image_panel'); if (p && p._zoomReset) p._zoomReset(); }")
 
         debug_font_plus_btn.click(
             fn=None,
@@ -4430,9 +4421,10 @@ function() {
             show_bdrc = visible and preproc_mode in {"bdrc", "gray"}
             show_rgb = visible and preproc_mode == "rgb"
             return (
-                gr.update(visible=not visible),  # model_info_row  (simple summary)
+                gr.update(visible=visible),      # model_info_row
                 gr.update(visible=visible),       # advanced_model_row
                 gr.update(visible=visible),       # advanced_bdrc_model_row
+                gr.update(visible=visible),       # advanced_accuracy_row
                 gr.update(visible=visible),       # advanced_scan_row
                 gr.update(visible=visible),       # advanced_runtime_row
                 gr.update(visible=visible),       # advanced_bdrc_line_row
@@ -4445,6 +4437,7 @@ function() {
                 gr.update(visible=visible),       # donut_input_after
                 gr.update(visible=visible),       # save_status
                 gr.update(visible=visible),       # advanced_debug_text_row
+                gr.update(visible=visible),       # advanced_compare_row
             )
 
         advanced_view.change(
@@ -4454,6 +4447,7 @@ function() {
                 model_info_row,
                 advanced_model_row,
                 advanced_bdrc_model_row,
+                advanced_accuracy_row,
                 advanced_scan_row,
                 advanced_runtime_row,
                 advanced_bdrc_line_row,
@@ -4466,6 +4460,7 @@ function() {
                 donut_input_after,
                 save_status,
                 advanced_debug_text_row,
+                advanced_compare_row,
             ],
         )
 
