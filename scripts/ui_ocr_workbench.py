@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -112,6 +114,58 @@ def _scan_folder_for_images(folder_path: str) -> Tuple[List[str], str]:
 def _make_thumbnails(image_paths: List[str]) -> List[Tuple[str, str]]:
     """Return a list of (path, caption) tuples suitable for gr.Gallery."""
     return [(p, Path(p).name) for p in image_paths]
+
+
+def _normalize_sbb_ppn(value: str) -> str:
+    ppn = str(value or "").strip()
+    if ppn.upper().startswith("PPN"):
+        ppn = ppn[3:]
+    if not ppn:
+        raise ValueError("Please enter an SBB PPN.")
+    if re.fullmatch(r"[0-9A-Za-z]+", ppn) is None:
+        raise ValueError("Invalid PPN. Use only letters and digits.")
+    return ppn
+
+
+def _load_sbb_ppn_images(ppn_value: str) -> Tuple[List[str], str, str]:
+    """Load a cached SBB PPN folder, downloading the full work when absent."""
+    try:
+        ppn = _normalize_sbb_ppn(ppn_value)
+    except ValueError as exc:
+        return [], "", str(exc)
+
+    folder = (ROOT / "sbb_images" / ppn).resolve()
+    if folder.exists() and not folder.is_dir():
+        return [], str(folder), f"SBB target exists but is not a directory: {folder}"
+
+    if folder.is_dir():
+        paths, scan_msg = _scan_folder_for_images(str(folder))
+        if paths:
+            return paths, str(folder), f"Using cached PPN {ppn}. {scan_msg}."
+
+    try:
+        from scripts.download_sbb_images import run as download_sbb_images
+
+        rc = int(
+            download_sbb_images(
+                SimpleNamespace(
+                    ppn=ppn,
+                    output_dir=str(folder),
+                    max_pages=0,
+                    workers=8,
+                    verify_ssl=True,
+                    show_metadata=False,
+                )
+            )
+        )
+    except Exception as exc:
+        paths, _ = _scan_folder_for_images(str(folder)) if folder.is_dir() else ([], "")
+        return paths, str(folder), f"Failed to download PPN {ppn}: {type(exc).__name__}: {exc}"
+
+    paths, scan_msg = _scan_folder_for_images(str(folder))
+    if rc != 0:
+        return paths, str(folder), f"SBB download for PPN {ppn} failed (exit code {rc}). {scan_msg}"
+    return paths, str(folder), f"Downloaded PPN {ppn} with metadata. {scan_msg}."
 
 
 def _is_manual_mode(mode: str) -> bool:
@@ -2916,11 +2970,10 @@ function() {
         # ── Folder Browser ──────────────────────────────────────────────────
         with gr.Accordion("📁 Folder Browser", open=True):
             gr.Markdown(
-                "Enter a folder path to browse images. "
-                "Click a thumbnail to load it into the workbench below and automatically "
-                "run the selected line segmentation backend + OCR engine."
+                "Enter an SBB PPN. Missing PPNs are downloaded in full with metadata to "
+                "`sbb_images/<PPN>`. Advanced View also allows a local image folder."
             )
-            with gr.Row():
+            with gr.Row(visible=False) as advanced_folder_path_row:
                 folder_path_input = gr.Textbox(
                     label="Image Folder",
                     placeholder="/path/to/your/images",
@@ -2928,6 +2981,13 @@ function() {
                     scale=8,
                 )
                 folder_scan_btn = gr.Button("🔍 Scan", variant="primary", scale=1, min_width=80)
+            with gr.Row():
+                ppn_input = gr.Textbox(
+                    label="SBB PPN",
+                    placeholder="e.g. 337138764X",
+                    scale=8,
+                )
+                ppn_load_btn = gr.Button("Load PPN", variant="primary", scale=1, min_width=80)
             folder_status = gr.Textbox(label="Status", interactive=False)
             # Hidden state: list of full image paths in the scanned folder
             folder_image_paths = gr.State([])
@@ -4422,6 +4482,7 @@ function() {
             show_rgb = visible and preproc_mode == "rgb"
             return (
                 gr.update(visible=visible),      # model_info_row
+                gr.update(visible=visible),       # advanced_folder_path_row
                 gr.update(visible=visible),       # advanced_model_row
                 gr.update(visible=visible),       # advanced_bdrc_model_row
                 gr.update(visible=visible),       # advanced_accuracy_row
@@ -4445,6 +4506,7 @@ function() {
             inputs=[advanced_view, preprocess_preset],
             outputs=[
                 model_info_row,
+                advanced_folder_path_row,
                 advanced_model_row,
                 advanced_bdrc_model_row,
                 advanced_accuracy_row,
@@ -4797,6 +4859,22 @@ function() {
             fn=_on_folder_scan,
             inputs=[folder_path_input],
             outputs=[folder_gallery, folder_image_paths, folder_status],
+        )
+
+        def _on_ppn_load(ppn: str):
+            paths, folder, msg = _load_sbb_ppn_images(ppn)
+            folder_update = gr.update(value=folder) if folder else gr.update()
+            return _make_thumbnails(paths), paths, msg, folder_update
+
+        ppn_load_btn.click(
+            fn=_on_ppn_load,
+            inputs=[ppn_input],
+            outputs=[folder_gallery, folder_image_paths, folder_status, folder_path_input],
+        )
+        ppn_input.submit(
+            fn=_on_ppn_load,
+            inputs=[ppn_input],
+            outputs=[folder_gallery, folder_image_paths, folder_status, folder_path_input],
         )
 
         def _on_gallery_select(
